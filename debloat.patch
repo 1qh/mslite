@@ -594,6 +594,66 @@ index 229b9025..3115f37c 100644
  
  target_compile_definitions(liblouis PRIVATE
      TABLESDIR=dataPathPtr           # compileTranslationTable.c
+diff --git a/src/framework/audio/common/audioutils.h b/src/framework/audio/common/audioutils.h
+index 0fecca7b..fa4bf6c4 100644
+--- a/src/framework/audio/common/audioutils.h
++++ b/src/framework/audio/common/audioutils.h
+@@ -130,7 +130,7 @@ inline samples_t minSamplesToReserve(RenderMode mode)
+         return 128;
+     }
+ 
+-    // Active: render more for better quality (rendering is usually much heavier in this scenario)
+-    return 1024;
++    //! NOTE MuseScoreLite plays a MIDI keyboard over playback, so the audio buffer size alone sets the latency
++    return 128;
+ }
+ }
+diff --git a/src/framework/audio/engine/internal/abstracteventsequencer.h b/src/framework/audio/engine/internal/abstracteventsequencer.h
+index e337f380..a6c931fa 100644
+--- a/src/framework/audio/engine/internal/abstracteventsequencer.h
++++ b/src/framework/audio/engine/internal/abstracteventsequencer.h
+@@ -199,13 +199,25 @@ public:
+ 
+         // Empty sequence means to continue the previous sequence
+         result.emplace(m_playbackPosition, EventSequence());
++        const msecs_t blockStart = m_playbackPosition;
+         m_playbackPosition += nextMsecs;
+ 
+-        if (m_currentMainSequenceIt == m_mainStreamEvents.cend()) {
+-            return result;
++        if (m_currentMainSequenceIt != m_mainStreamEvents.cend()) {
++            handleMainStream(result);
+         }
+ 
+-        handleMainStream(result);
++        //! NOTE MuseScoreLite sounds live input (a MIDI keyboard, a clicked key) while the score plays: the off-stream
++        //! events of this block move onto the playback timeline, keeping their offsets from the block's start
++        if (m_currentOffSequenceIt != m_offStreamEvents.cend()) {
++            EventSequenceMap live;
++            const msecs_t shift = blockStart - m_offstreamPosition;
++            m_offstreamPosition += nextMsecs;
++            handleOffStream(live);
++            for (auto& [position, sequence] : live) {
++                EventSequence& target = result[position + shift];
++                target.insert(target.end(), std::make_move_iterator(sequence.begin()), std::make_move_iterator(sequence.end()));
++            }
++        }
+ 
+         return result;
+     }
+diff --git a/src/framework/audio/main/internal/audioconfiguration.cpp b/src/framework/audio/main/internal/audioconfiguration.cpp
+index babb868d..d2902942 100644
+--- a/src/framework/audio/main/internal/audioconfiguration.cpp
++++ b/src/framework/audio/main/internal/audioconfiguration.cpp
+@@ -37,7 +37,7 @@ using namespace muse::audio;
+ using namespace muse::audio::synth;
+ 
+ static constexpr audioch_t AUDIO_CHANNELS = 2;
+-static constexpr samples_t DEFAULT_BUFFER_SIZE = 1024;
++static constexpr samples_t DEFAULT_BUFFER_SIZE = 128;
+ static constexpr sample_rate_t DEFAULT_SAMPLE_RATE = 44100;
+ 
+ //TODO: add other setting: audio device etc
 diff --git a/src/framework/global/internal/globalconfiguration.cpp b/src/framework/global/internal/globalconfiguration.cpp
 index 20440fe7..10872f2d 100644
 --- a/src/framework/global/internal/globalconfiguration.cpp
