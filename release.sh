@@ -114,11 +114,10 @@ sh "${HERE}/export-check.sh" "${BINARY}" "${MSCORE_CHECK_SCORE}"
 
 KEY_ID=$(cat "${MSCORE_SECRETS}/asc-api-key-id.txt")
 ISSUER=$(cat "${MSCORE_SECRETS}/asc-api-issuer-id.txt")
-VERSION=$(for part in MAJOR MINOR PATCH; do sed -n "s/^set(MUSE_APP_VERSION_${part} \"\\([0-9]*\\)\")$/\\1/p" version.cmake; done | paste -sd. -)-${SHORT}
 SIGN_IDENTITY="${IDENTITY}" NOTARY_KEY="${MSCORE_SECRETS}/asc-api.p8" \
   NOTARY_KEY_ID="${KEY_ID}" NOTARY_ISSUER="${ISSUER}" \
-  bash buildscripts/packaging/macOS/package.sh --app-name "MuseScoreLite" --vol-name "MuseScoreLite-${VERSION}" --sign < /dev/null
-DMG="applebuild/MuseScoreLite-${VERSION}.dmg"
+  bash buildscripts/packaging/macOS/package.sh --app-name "MuseScoreLite" --vol-name "MuseScoreLite-${SHORT}" --sign < /dev/null
+DMG="applebuild/MuseScoreLite-${SHORT}.dmg"
 [ -s "${DMG}" ] || {
   echo "packaging produced no disk image" >&2
   exit 1
@@ -132,12 +131,16 @@ sh "${HERE}/export-check.sh" "${PWD}/applebuild/mscore.app/Contents/MacOS/mscore
   exit 0
 }
 
-git push -q --force "https://github.com/${FORK}.git" HEAD:refs/heads/main "HEAD:refs/tags/${BRANCH}-muse"
 NOTES="Upstream ${BRANCH} at musescore/MuseScore@${HEAD_SHA} with: --serve (1 conversion job per stdin line, stays running, no Dock icon), the keyboard panel lighting the notes sounding during playback (upstream PR 34351) and shown only while the score plays, the flat SoundFont picker (every preset in 1 menu under a header per font), and a lean, fully offline reading app: the sheet alone on a filled screen under a merged title bar, no home page or tabs, a standard Window menu, no internet access at all, no welcome, tours, account, cloud, online publishing, update check, online help, Muse Sounds, translations or bundled soundfont (add your own .sf2/.sf3), English only, High-contrast Black theme, data in ~/mslite. Apple Silicon only, signed and notarized."
-if gh release view "${BRANCH}-muse" --repo "${FORK}" > /dev/null 2>&1; then
-  gh release upload "${BRANCH}-muse" "${DMG}" --repo "${FORK}" --clobber
-  gh release edit "${BRANCH}-muse" --repo "${FORK}" --title "MuseScoreLite ${VERSION}" --notes "${NOTES}" > /dev/null
+git push -q --force "https://github.com/${FORK}.git" HEAD:refs/heads/main "HEAD:refs/tags/${SHORT}"
+if gh release view "${SHORT}" --repo "${FORK}" > /dev/null 2>&1; then
+  gh release upload "${SHORT}" "${DMG}" --repo "${FORK}" --clobber
+  gh release edit "${SHORT}" --repo "${FORK}" --title "${SHORT}" --notes "${NOTES}" > /dev/null
 else
-  gh release create "${BRANCH}-muse" "${DMG}" --repo "${FORK}" --target main --latest --title "MuseScoreLite ${VERSION}" --notes "${NOTES}"
+  gh release create "${SHORT}" "${DMG}" --repo "${FORK}" --target main --latest --title "${SHORT}" --notes "${NOTES}"
 fi
-echo "released ${BRANCH}-muse at ${SHORT}"
+# The newest build is the only one kept: every other release and its tag goes
+for old in $(gh release list --repo "${FORK}" --json tagName --jq ".[].tagName | select(. != \"${SHORT}\")"); do
+  gh release delete "${old}" --repo "${FORK}" --cleanup-tag --yes
+done
+echo "released ${SHORT}"

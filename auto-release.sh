@@ -9,14 +9,11 @@ mkdir -p "$(dirname "${LOG}")"
 LATEST=$(gh api repos/musescore/MuseScore/releases/latest --jq .tag_name) || exit 1
 BRANCH=${MSCORE_BRANCH:-$(echo "${LATEST#v}" | cut -d. -f1-2)}
 HEAD_SHA=$(git ls-remote https://github.com/musescore/MuseScore.git "refs/heads/${BRANCH}" | cut -f1)
-NOTES=$(gh release view "${BRANCH}-muse" --repo "${MSCORE_FORK:-1qh/MuseScore}" --json body --jq .body 2> /dev/null || true)
-case "${NOTES}" in
-  *"@${HEAD_SHA} "*)
-    echo ok
-    exit 0
-    ;;
-  *) ;;
-esac
+SHORT=$(echo "${HEAD_SHA}" | cut -c1-8)
+if gh release view "${SHORT}" --repo "${MSCORE_FORK:-1qh/MuseScore}" > /dev/null 2>&1; then
+  echo ok
+  exit 0
+fi
 if sh "${HERE}/release.sh" > "${LOG}" 2>&1 < /dev/null; then
   osascript -e "display notification \"Released ${BRANCH} at ${HEAD_SHA}\" with title \"MuseScoreLite\"" > /dev/null 2>&1
   echo ok
