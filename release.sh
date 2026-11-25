@@ -29,7 +29,7 @@ if [ "${BASE}" != "${HEAD_SHA}" ] || [ "${SUBJECT}" != "muse: patch set and rele
   rm -rf "${SRC}"
   git clone -q --depth 1 --branch "${BRANCH}" "${UPSTREAM}" "${SRC}"
   cd "${SRC}"
-  git checkout -q -b "release/${BRANCH}"
+  git checkout -q -b main
   for patch in ${PATCHES}; do
     git apply --check "${HERE}/${patch}.patch" || {
       echo "patch ${patch} does not apply to ${BRANCH} at ${SHORT}" >&2
@@ -132,12 +132,12 @@ sh "${HERE}/export-check.sh" "${PWD}/applebuild/mscore.app/Contents/MacOS/mscore
   exit 0
 }
 
-git push -q --force "https://github.com/${FORK}.git" "release/${BRANCH}"
+git push -q --force "https://github.com/${FORK}.git" HEAD:refs/heads/main "HEAD:refs/tags/${BRANCH}-muse"
 NOTES="Upstream ${BRANCH} at musescore/MuseScore@${HEAD_SHA} with: --serve (1 conversion job per stdin line, stays running, no Dock icon), the keyboard panel lighting the notes sounding during playback (upstream PR 34351) and shown only while the score plays, the flat SoundFont picker (every preset in 1 menu under a header per font), and a lean, fully offline reading app: the sheet alone on a filled screen under a merged title bar, no home page or tabs, a standard Window menu, no internet access at all, no welcome, tours, account, cloud, online publishing, update check, online help, Muse Sounds, translations or bundled soundfont (add your own .sf2/.sf3), English only, High-contrast Black theme, data in ~/mslite. Apple Silicon only, signed and notarized."
 if gh release view "${BRANCH}-muse" --repo "${FORK}" > /dev/null 2>&1; then
   gh release upload "${BRANCH}-muse" "${DMG}" --repo "${FORK}" --clobber
   gh release edit "${BRANCH}-muse" --repo "${FORK}" --title "MuseScoreLite ${VERSION}" --notes "${NOTES}" > /dev/null
 else
-  gh release create "${BRANCH}-muse" "${DMG}" --repo "${FORK}" --target "release/${BRANCH}" --latest --title "MuseScoreLite ${VERSION}" --notes "${NOTES}"
+  gh release create "${BRANCH}-muse" "${DMG}" --repo "${FORK}" --target main --latest --title "MuseScoreLite ${VERSION}" --notes "${NOTES}"
 fi
 echo "released ${BRANCH}-muse at ${SHORT}"
