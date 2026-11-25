@@ -38,10 +38,10 @@ index 3154aefa..72ed75fd 100644
  install (DIRECTORY
      workspaces
 diff --git a/src/app/CMakeLists.txt b/src/app/CMakeLists.txt
-index 169be219..bf11089f 100644
+index 48a9fa1c..6ca6d172 100644
 --- a/src/app/CMakeLists.txt
 +++ b/src/app/CMakeLists.txt
-@@ -379,13 +379,10 @@ elseif(OS_IS_FBSD)
+@@ -386,13 +386,10 @@ elseif(OS_IS_FBSD)
  ###########################################
  elseif(OS_IS_MAC)
      install(FILES
@@ -55,7 +55,7 @@ index 169be219..bf11089f 100644
              ${PROJECT_SOURCE_DIR}/fonts/FreeSans.ttf
              ${PROJECT_SOURCE_DIR}/fonts/FreeSerif.ttf
              ${PROJECT_SOURCE_DIR}/fonts/FreeSerifBold.ttf
-@@ -396,11 +393,6 @@ elseif(OS_IS_MAC)
+@@ -403,11 +400,6 @@ elseif(OS_IS_MAC)
              ${PROJECT_SOURCE_DIR}/fonts/mscore-BC.ttf
              ${PROJECT_SOURCE_DIR}/fonts/mscoreTab.ttf
              ${PROJECT_SOURCE_DIR}/fonts/mscore/MScoreText.otf
@@ -137,19 +137,116 @@ index 32d743d8..3e50fe85 100644
  
              currentIndex: 0
 diff --git a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
-index dd4b7cf8..b044a56c 100644
+index dd4b7cf8..f11e3f66 100644
 --- a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
 +++ b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
-@@ -460,8 +460,7 @@ DockPage {
+@@ -118,10 +118,13 @@ DockPage {
+             id: notationToolBar
+ 
+             objectName: "notationToolBar"
++
++            // Hidden on open: the score view starts as the sheet alone
++            visible: false
+             title: qsTrc("appshell", "Notation toolbar")
+ 
+             floatable: false
+-            closable: false
++            closable: true
+             resizable: false
+             separatorsVisible: false
+ 
+@@ -140,6 +143,9 @@ DockPage {
+             id: playbackToolBar
+ 
+             objectName: root.pageModel.playbackToolBarName()
++
++            // Hidden on open: the score view starts as the sheet alone
++            visible: false
+             title: qsTrc("appshell", "Playback controls")
+ 
+             separatorsVisible: false
+@@ -167,6 +173,9 @@ DockPage {
+             id: extDockToolBar
+ 
+             objectName: root.pageModel.extensionsToolBarName()
++
++            // Hidden on open: the score view starts as the sheet alone
++            visible: false
+             title: qsTrc("appshell", "Extensions toolbar")
+ 
+             separatorsVisible: false
+@@ -195,10 +204,13 @@ DockPage {
+             id: undoRedoToolBar
+ 
+             objectName: root.pageModel.undoRedoToolBarName()
++
++            // Hidden on open: the score view starts as the sheet alone
++            visible: false
+             title: qsTrc("appshell", "Undo/redo")
+ 
+             floatable: false
+-            closable: false
++            closable: true
+             resizable: false
+             separatorsVisible: false
+ 
+@@ -219,6 +231,9 @@ DockPage {
+             id: noteInputBar
+ 
+             objectName: root.pageModel.noteInputBarName()
++
++            // Hidden on open: the score view starts as the sheet alone
++            visible: false
+             title: qsTrc("appshell", "Note input")
+ 
+             dropDestinations: [
+@@ -251,6 +266,9 @@ DockPage {
+             id: palettesPanel
+ 
+             objectName: root.pageModel.palettesPanelName()
++
++            // Hidden on open: the score view starts as the sheet alone
++            visible: false
+             title: qsTrc("appshell", "Palettes")
+ 
+             navigationSection: root.navigationPanelSec(palettesPanel.location)
+@@ -280,6 +298,9 @@ DockPage {
+             id: layoutPanel
+ 
+             objectName: root.pageModel.layoutPanelName()
++
++            // Hidden on open: the score view starts as the sheet alone
++            visible: false
+             title: qsTrc("appshell", "Layout")
+ 
+             navigationSection: root.navigationPanelSec(layoutPanel.location)
+@@ -309,6 +330,9 @@ DockPage {
+             id: inspectorPanel
+ 
+             objectName: root.pageModel.inspectorPanelName()
++
++            // Hidden on open: the score view starts as the sheet alone
++            visible: false
+             title: qsTrc("appshell", "Properties")
+ 
+             navigationSection: root.navigationPanelSec(inspectorPanel.location)
+@@ -460,7 +484,6 @@ DockPage {
  
              groupName: root.horizontalPanelsGroup
  
 -            //! NOTE: hidden by default
--            visible: false
-+            visible: true
+             visible: false
  
              location: Location.Bottom
+@@ -609,6 +632,8 @@ DockPage {
+     statusBar: DockStatusBar {
+         objectName: root.pageModel.statusBarName()
  
++        visible: false
++
+         navigationSection: content.navigationSection
+ 
+         NotationStatusBar {
 diff --git a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationStatusBar.qml b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationStatusBar.qml
 index 4b893445..9f825047 100644
 --- a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationStatusBar.qml
@@ -162,6 +259,20 @@ index 4b893445..9f825047 100644
  
              Layout.alignment: Qt.AlignVCenter
              Layout.preferredHeight: 28
+diff --git a/src/appshell/qml/MuseScore/AppShell/WindowContent.qml b/src/appshell/qml/MuseScore/AppShell/WindowContent.qml
+index 806fdc3f..2c8bda1c 100644
+--- a/src/appshell/qml/MuseScore/AppShell/WindowContent.qml
++++ b/src/appshell/qml/MuseScore/AppShell/WindowContent.qml
+@@ -67,6 +67,9 @@ DockWindow {
+             objectName: "mainToolBar"
+             title: qsTrc("appshell", "Main toolbar")
+ 
++            // The score page shows the sheet alone; the other pages keep their tabs
++            visible: root.currentPageUri !== "musescore://notation"
++
+             floatable: false
+             closable: false
+ 
 diff --git a/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp b/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp
 index 939c8162..bea9c419 100644
 --- a/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp
@@ -256,6 +367,43 @@ index f3a27ddc..9c7029b8 100644
  
      endResetModel();
  
+diff --git a/src/appshell/qml/MuseScore/AppShell/notationpagemodel.cpp b/src/appshell/qml/MuseScore/AppShell/notationpagemodel.cpp
+index e61f2540..44b75121 100644
+--- a/src/appshell/qml/MuseScore/AppShell/notationpagemodel.cpp
++++ b/src/appshell/qml/MuseScore/AppShell/notationpagemodel.cpp
+@@ -74,6 +74,12 @@ void NotationPageModel::init()
+         scheduleUpdateExtensionsToolBarVisibility();
+     });
+ 
++    // The piano keyboard shows while the score plays, and leaves the sheet alone otherwise
++    playbackController()->isPlayingChanged().onNotify(this, [this]() {
++        dispatcher()->dispatch("dock-set-open", ActionData::make_arg2<QString, bool>(PIANO_KEYBOARD_PANEL_NAME,
++                                                                                      playbackController()->isPlaying()));
++    });
++
+     brailleConfiguration()->braillePanelEnabledChanged().onNotify(this, [this]() {
+         emit isBraillePanelVisibleChanged();
+     });
+diff --git a/src/appshell/qml/MuseScore/AppShell/notationpagemodel.h b/src/appshell/qml/MuseScore/AppShell/notationpagemodel.h
+index 771d2645..29e2628b 100644
+--- a/src/appshell/qml/MuseScore/AppShell/notationpagemodel.h
++++ b/src/appshell/qml/MuseScore/AppShell/notationpagemodel.h
+@@ -35,6 +35,7 @@
+ #include "notation/inotationconfiguration.h"
+ #include "notationscene/inotationsceneconfiguration.h"
+ #include "braille/ibrailleconfiguration.h"
++#include "playback/iplaybackcontroller.h"
+ #include "iappshellconfiguration.h"
+ 
+ namespace mu::appshell {
+@@ -55,6 +56,7 @@ class NotationPageModel : public QObject, public muse::Contextable, public muse:
+     muse::ContextInject<muse::dock::IDockWindowProvider> dockWindowProvider = { this };
+     muse::ContextInject<muse::extensions::IExtensionsProvider> extensionsProvider = { this };
+     muse::ContextInject<context::IGlobalContext> globalContext = { this };
++    muse::ContextInject<playback::IPlaybackController> playbackController = { this };
+ 
+ public:
+     explicit NotationPageModel(QObject* parent = nullptr);
 diff --git a/src/braille/thirdparty/liblouis/CMakeLists.txt b/src/braille/thirdparty/liblouis/CMakeLists.txt
 index 229b9025..3115f37c 100644
 --- a/src/braille/thirdparty/liblouis/CMakeLists.txt
@@ -338,6 +486,40 @@ index 5fec67ae..ec86e3a3 100644
      settings()->setDefaultValue(UI_CUSTOM_COLORS_KEY, Val(readLegacyCustomColors()));
      settings()->setDefaultValue(UI_FOLLOW_SYSTEM_THEME_KEY, Val(false));
      settings()->setDefaultValue(UI_FONT_FAMILY_KEY, Val(defaultFontFamily()));
+diff --git a/src/framework/ui/view/platform/macos/macosmainwindowbridge.mm b/src/framework/ui/view/platform/macos/macosmainwindowbridge.mm
+index ac2d5d9e..3f3a1b6c 100644
+--- a/src/framework/ui/view/platform/macos/macosmainwindowbridge.mm
++++ b/src/framework/ui/view/platform/macos/macosmainwindowbridge.mm
+@@ -42,14 +42,29 @@
+ {
+ }
+ 
++//! The window's content runs under a transparent title bar with no title, so the window buttons sit over the app itself
++static void mergeTitleBar(QWindow* qWindow)
++{
++    NSWindow* nsWindow = nsWindowForQWindow(qWindow);
++    if (!nsWindow) {
++        return;
++    }
++
++    nsWindow.styleMask |= NSWindowStyleMaskFullSizeContentView;
++    nsWindow.titlebarAppearsTransparent = YES;
++    nsWindow.titleVisibility = NSWindowTitleHidden;
++}
++
+ void MacOSMainWindowBridge::init()
+ {
+     MainWindowBridge::init();
+ 
+     uiConfiguration()->applyPlatformStyle(m_window);
++    mergeTitleBar(m_window);
+ 
+     uiConfiguration()->currentThemeChanged().onNotify(this, [this]() {
+         uiConfiguration()->applyPlatformStyle(m_window);
++        mergeTitleBar(m_window);
+     });
+ }
+ 
 diff --git a/src/notation/internal/notationconfiguration.cpp b/src/notation/internal/notationconfiguration.cpp
 index 32155614..7328a5df 100644
 --- a/src/notation/internal/notationconfiguration.cpp
