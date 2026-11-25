@@ -417,10 +417,19 @@ index f3a27ddc..9c7029b8 100644
      endResetModel();
  
 diff --git a/src/appshell/qml/MuseScore/AppShell/notationpagemodel.cpp b/src/appshell/qml/MuseScore/AppShell/notationpagemodel.cpp
-index e61f2540..44b75121 100644
+index e61f2540..6011b19c 100644
 --- a/src/appshell/qml/MuseScore/AppShell/notationpagemodel.cpp
 +++ b/src/appshell/qml/MuseScore/AppShell/notationpagemodel.cpp
-@@ -74,6 +74,12 @@ void NotationPageModel::init()
+@@ -21,6 +21,8 @@
+  */
+ #include "notationpagemodel.h"
+ 
++#include "engraving/dom/masterscore.h"
++
+ #include "internal/applicationuiactions.h"
+ #include "dockwindow/idockwindow.h"
+ 
+@@ -74,6 +76,12 @@ void NotationPageModel::init()
          scheduleUpdateExtensionsToolBarVisibility();
      });
  
@@ -433,11 +442,38 @@ index e61f2540..44b75121 100644
      brailleConfiguration()->braillePanelEnabledChanged().onNotify(this, [this]() {
          emit isBraillePanelVisibleChanged();
      });
+@@ -183,6 +191,17 @@ void NotationPageModel::onNotationChanged()
+         return;
+     }
+ 
++    // A reader sees the sheet as it prints: invisible elements and layout marks start hidden, once per score, without
++    // marking the score changed; View > Show brings them back
++    if (IMasterNotationPtr master = globalContext()->currentMasterNotation()) {
++        engraving::MasterScore* score = master->masterScore();
++        if (score && m_readerViewScores.insert(score).second) {
++            score->setShowInvisible(false);
++            score->setShowUnprintable(false);
++            score->update();
++        }
++    }
++
+     INotationNoteInputPtr noteInput = notation->interaction()->noteInput();
+     noteInput->stateChanged().onNotify(this, [this]() {
+         scheduleUpdateDrumsetPanelVisibility();
 diff --git a/src/appshell/qml/MuseScore/AppShell/notationpagemodel.h b/src/appshell/qml/MuseScore/AppShell/notationpagemodel.h
-index 771d2645..29e2628b 100644
+index 771d2645..759ed5bb 100644
 --- a/src/appshell/qml/MuseScore/AppShell/notationpagemodel.h
 +++ b/src/appshell/qml/MuseScore/AppShell/notationpagemodel.h
-@@ -35,6 +35,7 @@
+@@ -24,6 +24,8 @@
+ 
+ #include <qqmlintegration.h>
+ 
++#include <set>
++
+ #include "async/asyncable.h"
+ #include "actions/actionable.h"
+ 
+@@ -35,6 +37,7 @@
  #include "notation/inotationconfiguration.h"
  #include "notationscene/inotationsceneconfiguration.h"
  #include "braille/ibrailleconfiguration.h"
@@ -445,14 +481,37 @@ index 771d2645..29e2628b 100644
  #include "iappshellconfiguration.h"
  
  namespace mu::appshell {
-@@ -55,6 +56,7 @@ class NotationPageModel : public QObject, public muse::Contextable, public muse:
+@@ -55,6 +58,9 @@ class NotationPageModel : public QObject, public muse::Contextable, public muse:
      muse::ContextInject<muse::dock::IDockWindowProvider> dockWindowProvider = { this };
      muse::ContextInject<muse::extensions::IExtensionsProvider> extensionsProvider = { this };
      muse::ContextInject<context::IGlobalContext> globalContext = { this };
 +    muse::ContextInject<playback::IPlaybackController> playbackController = { this };
++
++    std::set<const void*> m_readerViewScores;
  
  public:
      explicit NotationPageModel(QObject* parent = nullptr);
+diff --git a/src/appshell/qml/MuseScore/AppShell/platform/mac/Main.qml b/src/appshell/qml/MuseScore/AppShell/platform/mac/Main.qml
+index 9c2a4efe..8d51ca94 100644
+--- a/src/appshell/qml/MuseScore/AppShell/platform/mac/Main.qml
++++ b/src/appshell/qml/MuseScore/AppShell/platform/mac/Main.qml
+@@ -27,6 +27,16 @@ import MuseScore.AppShell
+ AppWindow {
+     id: root
+ 
++    // The score reads on the whole screen: the window goes full screen the first time it shows in each launch
++    property bool openedFullScreen: false
++
++    onVisibleChanged: {
++        if (visible && !openedFullScreen) {
++            openedFullScreen = true
++            Qt.callLater(root.showFullScreen)
++        }
++    }
++
+     PlatformMenuBar {
+         id: menuBar
+     }
 diff --git a/src/braille/thirdparty/liblouis/CMakeLists.txt b/src/braille/thirdparty/liblouis/CMakeLists.txt
 index 229b9025..3115f37c 100644
 --- a/src/braille/thirdparty/liblouis/CMakeLists.txt
@@ -649,6 +708,20 @@ index 32155614..7328a5df 100644
      settings()->valueChanged(INVERT_SCORE_COLOR).onReceive(nullptr, [this](const Val&) {
          m_scoreInversionChanged.notify();
          m_foregroundChanged.notify();
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/NotationView.qml b/src/notationscene/qml/MuseScore/NotationScene/NotationView.qml
+index 085b38bf..bebf0d21 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/NotationView.qml
++++ b/src/notationscene/qml/MuseScore/NotationScene/NotationView.qml
+@@ -80,6 +80,9 @@ FocusScope {
+             id: tabPanel
+             Layout.fillWidth: true
+ 
++            // The score fills the window: open scores are switched from the Window menu
++            visible: false
++
+             navigationPanel.section: navSec
+             navigationPanel.order: 1
+         }
 diff --git a/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp b/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp
 index 81415642..76f1a913 100644
 --- a/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp

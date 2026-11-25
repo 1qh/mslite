@@ -33,7 +33,7 @@ if [ "${DESCRIBED}" != "${TAG}" ] || [ "${SUBJECT}" != "muse: patch set and rele
   done
   mkdir -p patches
   for patch in ${PATCHES}; do cp "${HERE}/${patch}.patch" patches/; done
-  cp "${HERE}/release.sh" "${HERE}/window-check.sh" "${HERE}/net-check.sh" "${HERE}/export-check.sh" patches/
+  cp "${HERE}/release.sh" "${HERE}/window-check.sh" "${HERE}/net-check.sh" "${HERE}/export-check.sh" "${HERE}/quit-app.sh" patches/
   git add patches
   git -c user.name=muse -c user.email=muse@users.noreply.github.com commit -q -m "muse: patch set and release script"
 fi

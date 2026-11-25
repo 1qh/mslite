@@ -23,7 +23,7 @@ while :; do
   samples=$((samples + 1))
   sleep 1
 done
-kill "${PID}" 2> /dev/null || true
+sh "$(dirname "$0")/quit-app.sh" "${PID}"
 if [ -s "${FOUND}" ]; then
   echo "the app opened internet sockets:" >&2
   sort -u "${FOUND}" >&2

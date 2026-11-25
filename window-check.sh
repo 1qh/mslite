@@ -40,7 +40,7 @@ while [ -z "${verdict}" ]; do
   [ -z "${verdict}" ] && ! kill -0 "${PID}" 2> /dev/null && verdict="exited"
   sleep 1
 done
-kill "${PID}" 2> /dev/null || true
+sh "$(dirname "$0")/quit-app.sh" "${PID}"
 rm -f "${MARK}"
 case ${verdict} in
   ok) echo ok ;;
