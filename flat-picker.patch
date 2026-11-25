@@ -68,7 +68,7 @@ index 05adfae1..8740ba12 100644
              continue;
          }
 diff --git a/src/framework/uicomponents/qml/Muse/UiComponents/internal/StyledMenu.qml b/src/framework/uicomponents/qml/Muse/UiComponents/internal/StyledMenu.qml
-index 480a6653..97a1ca07 100644
+index 480a6653..4e7b566e 100644
 --- a/src/framework/uicomponents/qml/Muse/UiComponents/internal/StyledMenu.qml
 +++ b/src/framework/uicomponents/qml/Muse/UiComponents/internal/StyledMenu.qml
 @@ -50,6 +50,7 @@ MenuView {
@@ -126,6 +126,44 @@ index 480a6653..97a1ca07 100644
                  function focusOnSelected() {
                      var item = selectedItem()
                      if (Boolean(item)) {
+@@ -483,7 +517,7 @@ MenuView {
+                 readonly property var modelData: Boolean(root.model.get) ? model.item : model.modelData
+                 readonly property bool isSeparator: !(modelData?.title)
+ 
+-                sourceComponent: isSeparator ? separatorComp : menuItemComp
++                sourceComponent: isSeparator ? separatorComp : (modelData?.isSectionHeader ? sectionHeaderComp : menuItemComp)
+ 
+                 Component {
+                     id: menuItemComp
+@@ -549,6 +583,28 @@ MenuView {
+                     }
+                 }
+ 
++                Component {
++                    id: sectionHeaderComp
++
++                    // A section's title: large, bold and at full contrast, and never a choice
++                    StyledTextLabel {
++                        width: root.menuMetrics?.itemWidth ?? 0
++                        height: implicitHeight + 16
++
++                        leftPadding: 12
++                        rightPadding: 12
++                        topPadding: 10
++                        bottomPadding: 6
++
++                        horizontalAlignment: Text.AlignLeft
++                        verticalAlignment: Text.AlignBottom
++
++                        text: loader.modelData?.title ?? ""
++                        font: ui.theme.titleBoldFont
++                        color: ui.theme.fontPrimaryColor
++                    }
++                }
++
+                 Component {
+                     id: separatorComp
+ 
 diff --git a/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp b/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp
 index 1a36a21c..81415642 100644
 --- a/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp
