@@ -136,6 +136,30 @@ index 32d743d8..3e50fe85 100644
              ]
  
              currentIndex: 0
+diff --git a/src/appshell/qml/MuseScore/AppShell/MainToolBar.qml b/src/appshell/qml/MuseScore/AppShell/MainToolBar.qml
+index 1fb246b2..35427af9 100644
+--- a/src/appshell/qml/MuseScore/AppShell/MainToolBar.qml
++++ b/src/appshell/qml/MuseScore/AppShell/MainToolBar.qml
+@@ -32,7 +32,10 @@ import MuseScore.AppShell
+ Item {
+     id: root
+ 
+-    width: radioButtonList.width
++    // On macOS the window buttons sit over the app's top-left corner, so the tabs start past them
++    readonly property int windowButtonsInset: Qt.platform.os === "osx" ? 76 : 0
++
++    width: radioButtonList.width + windowButtonsInset
+     height: radioButtonList.height
+ 
+     property alias navigation: navPanel
+@@ -69,6 +72,7 @@ Item {
+ 
+     RadioButtonGroup {
+         id: radioButtonList
++        x: root.windowButtonsInset
+         spacing: 0
+ 
+         model: toolBarModel
 diff --git a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
 index dd4b7cf8..f11e3f66 100644
 --- a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
@@ -487,10 +511,10 @@ index 5fec67ae..ec86e3a3 100644
      settings()->setDefaultValue(UI_FOLLOW_SYSTEM_THEME_KEY, Val(false));
      settings()->setDefaultValue(UI_FONT_FAMILY_KEY, Val(defaultFontFamily()));
 diff --git a/src/framework/ui/view/platform/macos/macosmainwindowbridge.mm b/src/framework/ui/view/platform/macos/macosmainwindowbridge.mm
-index ac2d5d9e..3f3a1b6c 100644
+index ac2d5d9e..58f2aa21 100644
 --- a/src/framework/ui/view/platform/macos/macosmainwindowbridge.mm
 +++ b/src/framework/ui/view/platform/macos/macosmainwindowbridge.mm
-@@ -42,14 +42,29 @@
+@@ -42,14 +42,30 @@
  {
  }
  
@@ -502,8 +526,9 @@ index ac2d5d9e..3f3a1b6c 100644
 +        return;
 +    }
 +
-+    nsWindow.styleMask |= NSWindowStyleMaskFullSizeContentView;
-+    nsWindow.titlebarAppearsTransparent = YES;
++    // Qt draws the app under the title bar and gives it no background; Qt has no hint for hiding the title text
++    qWindow->setFlag(Qt::ExpandedClientAreaHint, true);
++    qWindow->setFlag(Qt::NoTitleBarBackgroundHint, true);
 +    nsWindow.titleVisibility = NSWindowTitleHidden;
 +}
 +
