@@ -144,6 +144,23 @@ index fad6a767..d04b6fef 100644
          if (!configuration()->hasCompletedFirstLaunchSetup()) {
              interactive()->open(FIRST_LAUNCH_SETUP_URI);
              return;
+diff --git a/src/appshell/qml/MuseScore/AppShell/AppWindow.qml b/src/appshell/qml/MuseScore/AppShell/AppWindow.qml
+index 517c04d7..f79701c9 100644
+--- a/src/appshell/qml/MuseScore/AppShell/AppWindow.qml
++++ b/src/appshell/qml/MuseScore/AppShell/AppWindow.qml
+@@ -47,6 +47,12 @@ ApplicationWindow {
+ 
+     visible: false
+ 
++    // The app runs under the merged title bar: no automatic padding for the title bar's safe area
++    topPadding: 0
++    leftPadding: 0
++    rightPadding: 0
++    bottomPadding: 0
++
+     color: ui.theme.backgroundPrimaryColor
+ 
+     Component.onCompleted: {
 diff --git a/src/appshell/qml/MuseScore/AppShell/HomePage/HomeMenu.qml b/src/appshell/qml/MuseScore/AppShell/HomePage/HomeMenu.qml
 index 32d743d8..3e50fe85 100644
 --- a/src/appshell/qml/MuseScore/AppShell/HomePage/HomeMenu.qml
@@ -447,6 +464,29 @@ index 229b9025..3115f37c 100644
  
  target_compile_definitions(liblouis PRIVATE
      TABLESDIR=dataPathPtr           # compileTranslationTable.c
+diff --git a/src/framework/global/internal/globalconfiguration.cpp b/src/framework/global/internal/globalconfiguration.cpp
+index 20440fe7..ad594672 100644
+--- a/src/framework/global/internal/globalconfiguration.cpp
++++ b/src/framework/global/internal/globalconfiguration.cpp
+@@ -107,7 +107,8 @@ QString GlobalConfiguration::resolveUserAppDataPath() const
+ #elif defined(Q_OS_WASM)
+     return QString("/files/data");
+ #else
+-    return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
++    // MuseScoreLite keeps everything under ~/mslite: the app's own data here, the user's files 1 level up
++    return QDir::homePath() + "/mslite/app";
+ #endif
+ }
+ 
+@@ -118,7 +119,7 @@ io::path_t GlobalConfiguration::userBackupPath() const
+ 
+ io::path_t GlobalConfiguration::userDataPath() const
+ {
+-    static io::path_t p = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + "/" + QCoreApplication::applicationName();
++    static io::path_t p = QDir::homePath() + "/mslite";
+     return p;
+ }
+ 
 diff --git a/src/framework/global/internal/interactive.cpp b/src/framework/global/internal/interactive.cpp
 index 6116cb3f..ec211025 100644
 --- a/src/framework/global/internal/interactive.cpp
@@ -459,6 +499,19 @@ index 6116cb3f..ec211025 100644
 +        return make_ret(Ret::Code::NotSupported);
 +    }
      return QDesktopServices::openUrl(url);
+ }
+ 
+diff --git a/src/framework/global/settings.cpp b/src/framework/global/settings.cpp
+index 9aaded3d..aeebfaeb 100644
+--- a/src/framework/global/settings.cpp
++++ b/src/framework/global/settings.cpp
+@@ -244,7 +244,7 @@ QString Settings::dataPath() const
+ #ifdef WIN_PORTABLE
+     return QDir::cleanPath(QString("%1/../../../Data/settings").arg(QCoreApplication::applicationDirPath()));
+ #else
+-    return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
++    return QDir::homePath() + "/mslite/app";
+ #endif
  }
  
 diff --git a/src/framework/network/internal/networkmanager.cpp b/src/framework/network/internal/networkmanager.cpp

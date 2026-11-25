@@ -5,7 +5,7 @@
 set -e
 BINARY=$1
 SCORE=$2
-LOGS="${HOME}/Library/Application Support/MuseScore/MuseScore4/logs"
+LOGS="${HOME}/mslite/app/logs"
 RUNNING=$(ps -axo comm=)
 case "
 ${RUNNING}
