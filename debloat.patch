@@ -190,13 +190,24 @@ index fad6a767..d04b6fef 100644
              interactive()->open(FIRST_LAUNCH_SETUP_URI);
              return;
 diff --git a/src/appshell/qml/MuseScore/AppShell/AppWindow.qml b/src/appshell/qml/MuseScore/AppShell/AppWindow.qml
-index 517c04d7..f79701c9 100644
+index 517c04d7..ced4f0b9 100644
 --- a/src/appshell/qml/MuseScore/AppShell/AppWindow.qml
 +++ b/src/appshell/qml/MuseScore/AppShell/AppWindow.qml
-@@ -47,6 +47,12 @@ ApplicationWindow {
+@@ -47,6 +47,23 @@ ApplicationWindow {
  
      visible: false
  
++    // On macOS the window fills the screen the first time it shows in each launch, as the Window menu's Fill does;
++    // this runs after the saved window size is restored, which it would otherwise override
++    property bool filledOnLaunch: false
++
++    onVisibleChanged: {
++        if (visible && !filledOnLaunch && Qt.platform.os === "osx") {
++            filledOnLaunch = true
++            Qt.callLater(bridge.fillScreen)
++        }
++    }
++
 +    // The app runs under the merged title bar: no automatic padding for the title bar's safe area
 +    topPadding: 0
 +    leftPadding: 0
@@ -536,27 +547,6 @@ index 771d2645..759ed5bb 100644
  
  public:
      explicit NotationPageModel(QObject* parent = nullptr);
-diff --git a/src/appshell/qml/MuseScore/AppShell/platform/mac/Main.qml b/src/appshell/qml/MuseScore/AppShell/platform/mac/Main.qml
-index 9c2a4efe..8d51ca94 100644
---- a/src/appshell/qml/MuseScore/AppShell/platform/mac/Main.qml
-+++ b/src/appshell/qml/MuseScore/AppShell/platform/mac/Main.qml
-@@ -27,6 +27,16 @@ import MuseScore.AppShell
- AppWindow {
-     id: root
- 
-+    // The score reads on the whole screen: the window goes full screen the first time it shows in each launch
-+    property bool openedFullScreen: false
-+
-+    onVisibleChanged: {
-+        if (visible && !openedFullScreen) {
-+            openedFullScreen = true
-+            Qt.callLater(root.showFullScreen)
-+        }
-+    }
-+
-     PlatformMenuBar {
-         id: menuBar
-     }
 diff --git a/src/braille/thirdparty/liblouis/CMakeLists.txt b/src/braille/thirdparty/liblouis/CMakeLists.txt
 index 229b9025..3115f37c 100644
 --- a/src/braille/thirdparty/liblouis/CMakeLists.txt
@@ -705,11 +695,25 @@ index 5fec67ae..ec86e3a3 100644
      settings()->setDefaultValue(UI_CUSTOM_COLORS_KEY, Val(readLegacyCustomColors()));
      settings()->setDefaultValue(UI_FOLLOW_SYSTEM_THEME_KEY, Val(false));
      settings()->setDefaultValue(UI_FONT_FAMILY_KEY, Val(defaultFontFamily()));
+diff --git a/src/framework/ui/view/platform/macos/macosmainwindowbridge.h b/src/framework/ui/view/platform/macos/macosmainwindowbridge.h
+index 62d998b7..b48a171e 100644
+--- a/src/framework/ui/view/platform/macos/macosmainwindowbridge.h
++++ b/src/framework/ui/view/platform/macos/macosmainwindowbridge.h
+@@ -40,6 +40,9 @@ public:
+ 
+     bool fileModified() const override;
+ 
++    //! Size the window to the screen's visible area, as the Window menu's Fill does
++    Q_INVOKABLE void fillScreen();
++
+ public slots:
+     void setFileModified(bool modified) override;
+ 
 diff --git a/src/framework/ui/view/platform/macos/macosmainwindowbridge.mm b/src/framework/ui/view/platform/macos/macosmainwindowbridge.mm
-index ac2d5d9e..58f2aa21 100644
+index ac2d5d9e..10c52887 100644
 --- a/src/framework/ui/view/platform/macos/macosmainwindowbridge.mm
 +++ b/src/framework/ui/view/platform/macos/macosmainwindowbridge.mm
-@@ -42,14 +42,30 @@
+@@ -42,17 +42,44 @@
  {
  }
  
@@ -740,6 +744,20 @@ index ac2d5d9e..58f2aa21 100644
      });
  }
  
++void MacOSMainWindowBridge::fillScreen()
++{
++    NSWindow* nsWindow = nsWindowForQWindow(m_window);
++    if (!nsWindow) {
++        return;
++    }
++
++    NSScreen* screen = [nsWindow screen] ? [nsWindow screen] : [NSScreen mainScreen];
++    [nsWindow setFrame:[screen visibleFrame] display:YES animate:NO];
++}
++
+ bool MacOSMainWindowBridge::fileModified() const
+ {
+     //! NOTE QWindow misses an API for this, so we'll do it ourselves.
 diff --git a/src/notation/internal/notationconfiguration.cpp b/src/notation/internal/notationconfiguration.cpp
 index 32155614..7328a5df 100644
 --- a/src/notation/internal/notationconfiguration.cpp
