@@ -5,7 +5,7 @@
 set -e
 BINARY=$1
 SCORE=$2
-LOGS="${HOME}/mslite/app/logs"
+LOGS="${HOME}/mslite/logs"
 RUNNING=$(ps -axo comm=)
 case "
 ${RUNNING}

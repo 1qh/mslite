@@ -465,7 +465,7 @@ index 229b9025..3115f37c 100644
  target_compile_definitions(liblouis PRIVATE
      TABLESDIR=dataPathPtr           # compileTranslationTable.c
 diff --git a/src/framework/global/internal/globalconfiguration.cpp b/src/framework/global/internal/globalconfiguration.cpp
-index 20440fe7..ad594672 100644
+index 20440fe7..10872f2d 100644
 --- a/src/framework/global/internal/globalconfiguration.cpp
 +++ b/src/framework/global/internal/globalconfiguration.cpp
 @@ -107,7 +107,8 @@ QString GlobalConfiguration::resolveUserAppDataPath() const
@@ -473,8 +473,8 @@ index 20440fe7..ad594672 100644
      return QString("/files/data");
  #else
 -    return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
-+    // MuseScoreLite keeps everything under ~/mslite: the app's own data here, the user's files 1 level up
-+    return QDir::homePath() + "/mslite/app";
++    // MuseScoreLite keeps all its data and the user's folders together under ~/mslite
++    return QDir::homePath() + "/mslite";
  #endif
  }
  
@@ -502,15 +502,45 @@ index 6116cb3f..ec211025 100644
  }
  
 diff --git a/src/framework/global/settings.cpp b/src/framework/global/settings.cpp
-index 9aaded3d..aeebfaeb 100644
+index 9aaded3d..20549a94 100644
 --- a/src/framework/global/settings.cpp
 +++ b/src/framework/global/settings.cpp
-@@ -244,7 +244,7 @@ QString Settings::dataPath() const
+@@ -26,6 +26,8 @@
+ #include <QSettings>
+ #include <QStandardPaths>
+ #include <QDir>
++#include <QFile>
++#include <QFileInfo>
+ 
+ #ifdef MUSE_MODULE_MULTIWINDOWS
+ #include "multiwindows/resourcelockguard.h"
+@@ -112,7 +114,19 @@ void Settings::reset(bool keepDefaultSettings, bool notifyAboutChanges, bool not
+     m_localSettings.clear();
+ 
+     if (!keepDefaultSettings) {
+-        QDir(dataPath()).removeRecursively();
++        // The data folder also holds the user's own folders (SoundFonts, Scores, ...), so a reset removes only the
++        // app's own files there, named here, and never anything else
++        static const QStringList APP_OWNED = { "logs", "workspaces", "session", "cloud_scores", "extensions", "locale",
++                                               "recent_files.json", "update_request_history.json" };
++        const QDir data(dataPath());
++        for (const QString& name : APP_OWNED) {
++            const QFileInfo entry(data.filePath(name));
++            if (entry.isDir()) {
++                QDir(entry.filePath()).removeRecursively();
++            } else if (entry.exists()) {
++                QFile::remove(entry.filePath());
++            }
++        }
+         QDir().mkpath(dataPath());
+     }
+ 
+@@ -244,7 +258,7 @@ QString Settings::dataPath() const
  #ifdef WIN_PORTABLE
      return QDir::cleanPath(QString("%1/../../../Data/settings").arg(QCoreApplication::applicationDirPath()));
  #else
 -    return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
-+    return QDir::homePath() + "/mslite/app";
++    return QDir::homePath() + "/mslite";
  #endif
  }
  
