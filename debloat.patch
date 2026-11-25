@@ -351,6 +351,45 @@ index 32155614..7328a5df 100644
      settings()->valueChanged(INVERT_SCORE_COLOR).onReceive(nullptr, [this](const Val&) {
          m_scoreInversionChanged.notify();
          m_foregroundChanged.notify();
+diff --git a/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp b/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp
+index 81415642..76f1a913 100644
+--- a/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp
++++ b/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp
+@@ -45,7 +45,6 @@ using namespace muse::audio::synth;
+ static const QString VST_MENU_ITEM_ID("VST3");
+ static const QString SOUNDFONTS_MENU_ITEM_ID("SoundFonts");
+ static const QString MUSE_MENU_ITEM_ID("MuseSounds");
+-static const QString GET_MORE_SOUNDS_ID("getMoreSounds");
+ 
+ static const muse::String MS_BASIC_SOUNDFONT_NAME(u"MS Basic");
+ 
+@@ -114,11 +113,6 @@ void InputResourceItem::requestAvailableResources()
+             result << buildSoundFontItems(sfResourcesSearch->second);
+         }
+ 
+-        result << buildSeparator();
+-        QVariantMap getMore =  buildExternalLinkMenuItem(GET_MORE_SOUNDS_ID, muse::qtrc("playback", "Get more sounds"));
+-        getMore["alwaysAppend"] = true; // Always add this to the end of our lists, ignoring filters
+-        result << getMore;
+-
+         emit availableResourceListResolved(result);
+     })
+     .onReject(this, [](const int errCode, const std::string& errText) {
+@@ -130,14 +124,6 @@ void InputResourceItem::requestAvailableResources()
+ 
+ void InputResourceItem::handleMenuItem(const QString& menuItemId)
+ {
+-    if (menuItemId == GET_MORE_SOUNDS_ID) {
+-        const QString url = QString::fromStdString(globalConfiguration()->museHubWebUrl());
+-        const QString urlParams("muse-sounds?utm_medium=Referral&utm_source=mss"
+-                                "&utm_campaign=MH_WW_REF_MSS_DESKTOP_ALL_261026_crosslink&utm_content=mixer_sounds");
+-        interactive()->openUrl(url + urlParams);
+-        return;
+-    }
+-
+     AudioResourceType newResourceType = AudioResourceType::Undefined;
+     AudioResourceId newResourceId;
+     parseAudioResourceTypeAndId(menuItemId, newResourceType, newResourceId);
 diff --git a/src/preferences/qml/MuseScore/Preferences/AudioMidiPreferencesPage.qml b/src/preferences/qml/MuseScore/Preferences/AudioMidiPreferencesPage.qml
 index aefdb619..1acd1832 100644
 --- a/src/preferences/qml/MuseScore/Preferences/AudioMidiPreferencesPage.qml

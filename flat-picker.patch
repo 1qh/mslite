@@ -1,0 +1,348 @@
+diff --git a/src/framework/uicomponents/qml/Muse/UiComponents/filteredflyoutmodel.cpp b/src/framework/uicomponents/qml/Muse/UiComponents/filteredflyoutmodel.cpp
+index 05adfae1..8740ba12 100644
+--- a/src/framework/uicomponents/qml/Muse/UiComponents/filteredflyoutmodel.cpp
++++ b/src/framework/uicomponents/qml/Muse/UiComponents/filteredflyoutmodel.cpp
+@@ -29,14 +29,19 @@ using namespace muse::uicomponents;
+ // Recursively traverse a flyout tree, collect all "leaves" (items without a sub item)...
+ static void flattenTreeModel(const QVariant& treeModel, const QString& categoryTitle, QVariantList& result, QVariant& alwaysAppend)
+ {
++    // A section header groups the leaves that follow it: they keep their bare titles and are listed under the header
++    QString sectionTitle;
++
+     for (const QVariant& item : treeModel.toList()) {
+         QVariantMap menuItem = item.toMap();
+-        if (menuItem.empty()) {
++        const QString title = menuItem.value("title").toString();
++        if (title.isEmpty()) {
++            sectionTitle.clear(); // A separator ends the section
+             continue;
+         }
+ 
+-        const QString title = menuItem.value("title").toString();
+-        if (title.isEmpty()) {
++        if (menuItem.value("isSectionHeader").toBool()) {
++            sectionTitle = title;
+             continue;
+         }
+ 
+@@ -60,6 +65,12 @@ static void flattenTreeModel(const QVariant& treeModel, const QString& categoryT
+             continue;
+         }
+ 
++        if (!sectionTitle.isEmpty()) {
++            menuItem.insert("section", sectionTitle);
++            result << menuItem;
++            continue;
++        }
++
+         const QString prefix = categoryTitle.isEmpty() ? muse::qtrc("global", "Unknown") : categoryTitle;
+         menuItem.insert("title", prefix + " - " + title);
+ 
+@@ -113,6 +124,28 @@ void FilteredFlyoutModel::setFilterText(const QString& filterText)
+     for (const QVariant& item : m_flattenedModel.toList()) {
+         QVariantMap itemMap = item.toMap();
+         const QString title = itemMap.value("title").toString();
++        const QString section = itemMap.value("section").toString();
++
++        if (!section.isEmpty()) {
++            if (!title.contains(m_filterText, Qt::CaseInsensitive) && !section.contains(m_filterText, Qt::CaseInsensitive)) {
++                continue;
++            }
++
++            if (section != currentPrefix) {
++                QVariantMap header;
++                header.insert("id", QString(section + "\\section"));
++                header.insert("title", section);
++                header.insert("enabled", false);
++                header.insert("checkable", false);
++                header.insert("isSectionHeader", true);
++                newModel << header;
++            }
++
++            newModel << itemMap;
++            currentPrefix = section;
++            continue;
++        }
++
+         if (!title.contains(m_filterText, Qt::CaseInsensitive)) {
+             continue;
+         }
+diff --git a/src/framework/uicomponents/qml/Muse/UiComponents/internal/StyledMenu.qml b/src/framework/uicomponents/qml/Muse/UiComponents/internal/StyledMenu.qml
+index 480a6653..97a1ca07 100644
+--- a/src/framework/uicomponents/qml/Muse/UiComponents/internal/StyledMenu.qml
++++ b/src/framework/uicomponents/qml/Muse/UiComponents/internal/StyledMenu.qml
+@@ -50,6 +50,7 @@ MenuView {
+     function requestFocus() {
+         if (root.isSearchable) {
+             searchLoader.requestFocus()
++            Qt.callLater(prv.scrollToCurrent)
+             return
+         }
+         var focused = prv.focusOnSelected()
+@@ -317,6 +318,16 @@ MenuView {
+                         rightMargin: root.viewMargins
+                     }
+ 
++                    onAccepted: {
++                        if (!root.isSearching) {
++                            return
++                        }
++                        var item = prv.firstPickable()
++                        if (item) {
++                            root.handleMenuItem(item.id)
++                        }
++                    }
++
+                     onSearchTextChanged: {
+                         if (root.isSubMenuOpen) {
+                             // This is a failsafe - see onIsSubmenuOpenChanged...
+@@ -452,6 +463,29 @@ MenuView {
+                     return false
+                 }
+ 
++                // An item marked scrollTo is the current choice: show it when the menu opens
++                function scrollToCurrent() {
++                    var items = listView.model
++                    for (var i = 0; i < (items ? items.length : 0); ++i) {
++                        if (items[i] && items[i].scrollTo) {
++                            listView.positionViewAtIndex(i, ListView.Center)
++                            return
++                        }
++                    }
++                }
++
++                // The first enabled item without a submenu, picked by Enter while searching
++                function firstPickable() {
++                    var items = listView.model
++                    for (var i = 0; i < (items ? items.length : 0); ++i) {
++                        var item = items[i]
++                        if (item && item.title && item.enabled !== false && !(item.subitems && item.subitems.length) && item.id) {
++                            return item
++                        }
++                    }
++                    return null
++                }
++
+                 function focusOnSelected() {
+                     var item = selectedItem()
+                     if (Boolean(item)) {
+diff --git a/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp b/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp
+index 1a36a21c..81415642 100644
+--- a/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp
++++ b/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp
+@@ -21,6 +21,7 @@
+  */
+ #include "inputresourceitem.h"
+ 
++#include <limits>
+ #include <optional>
+ 
+ #include <QList>
+@@ -110,7 +111,7 @@ void InputResourceItem::requestAvailableResources()
+ 
+         auto sfResourcesSearch = m_availableResourceMap.find(AudioResourceType::FluidSoundfont);
+         if (sfResourcesSearch != m_availableResourceMap.end()) {
+-            result << buildSoundFontsMenuItem(sfResourcesSearch->second);
++            result << buildSoundFontItems(sfResourcesSearch->second);
+         }
+ 
+         result << buildSeparator();
+@@ -336,7 +337,7 @@ QVariantMap InputResourceItem::buildVstMenuItem(const ResourceByVendorMap& resou
+                          /*includeInFilteredLists*/ false);
+ }
+ 
+-QVariantMap InputResourceItem::buildSoundFontsMenuItem(const ResourceByVendorMap& resourcesByVendor) const
++QVariantList InputResourceItem::buildSoundFontItems(const ResourceByVendorMap& resourcesByVendor) const
+ {
+     // Get info about current resource
+     const muse::String& currentSoundFontName = m_currentInputParams.resourceMeta.attributeVal(SOUNDFONT_NAME_ATTRIBUTE);
+@@ -353,29 +354,49 @@ QVariantMap InputResourceItem::buildSoundFontsMenuItem(const ResourceByVendorMap
+         }
+     }
+ 
+-    // Group resources by SoundFont name
++    // Group resources by SoundFont name, noting each font's lowest bank
+     std::map<muse::String, AudioResourceMetaList> resourcesBySoundFont;
++    std::map<muse::String, int> lowestBankBySoundFont;
+ 
+     for (const auto& pair : resourcesByVendor) {
+         for (const AudioResourceMeta& resourceMeta : pair.second) {
+             const muse::String& soundFontName = resourceMeta.attributeVal(SOUNDFONT_NAME_ATTRIBUTE);
+ 
+             resourcesBySoundFont[soundFontName].push_back(resourceMeta);
++
++            bool bankOk = false;
++            int bank = resourceMeta.attributeVal(PRESET_BANK_ATTRIBUTE).toInt(&bankOk);
++            if (bankOk) {
++                auto it = lowestBankBySoundFont.find(soundFontName);
++                if (it == lowestBankBySoundFont.end() || bank < it->second) {
++                    lowestBankBySoundFont[soundFontName] = bank;
++                }
++            }
+         }
+     }
+ 
+-    // Sort SoundFonts by name and add them to the menu
++    // Order SoundFonts by their lowest bank, then by name: the bank numbers carry the fonts' intended order
+     std::vector<muse::String> soundFonts;
+     soundFonts.reserve(resourcesBySoundFont.size());
+     for (const auto& pair : resourcesBySoundFont) {
+         soundFonts.push_back(pair.first);
+     }
+ 
+-    std::sort(soundFonts.begin(), soundFonts.end(), [](const muse::String& s1, const muse::String& s2) {
++    auto lowestBank = [&lowestBankBySoundFont](const muse::String& soundFont) {
++        auto it = lowestBankBySoundFont.find(soundFont);
++        return it == lowestBankBySoundFont.end() ? std::numeric_limits<int>::max() : it->second;
++    };
++
++    std::sort(soundFonts.begin(), soundFonts.end(), [&lowestBank](const muse::String& s1, const muse::String& s2) {
++        const int b1 = lowestBank(s1);
++        const int b2 = lowestBank(s2);
++        if (b1 != b2) {
++            return b1 < b2;
++        }
+         return muse::strings::lessThanCaseInsensitive(s1, s2);
+     });
+ 
+-    QVariantList soundFontItems;
++    QVariantList items;
+     muse::String currentSoundFontId = muse::String::fromStdString(m_currentInputParams.resourceMeta.id);
+ 
+     for (const muse::String& soundFont : soundFonts) {
+@@ -384,17 +405,13 @@ QVariantMap InputResourceItem::buildSoundFontsMenuItem(const ResourceByVendorMap
+         bool isCurrentSoundFont = currentSoundFontName == soundFont || currentSoundFontId == soundFont;
+ 
+         if (soundFont == MS_BASIC_SOUNDFONT_NAME) {
+-            soundFontItems << buildMsBasicMenuItem(resourcesBySoundFont[soundFont], isCurrentSoundFont, currentPreset);
++            items << buildMsBasicMenuItem(resourcesBySoundFont[soundFont], isCurrentSoundFont, currentPreset);
+         } else {
+-            soundFontItems << buildSoundFontMenuItem(soundFont, resourcesBySoundFont[soundFont], isCurrentSoundFont, currentPreset);
++            items << buildSoundFontSection(soundFont, resourcesBySoundFont[soundFont], isCurrentSoundFont, currentPreset);
+         }
+     }
+ 
+-    return buildMenuItem(SOUNDFONTS_MENU_ITEM_ID,
+-                         muse::qtrc("playback", "SoundFonts"),
+-                         m_currentInputParams.resourceMeta.type == AudioResourceType::FluidSoundfont,
+-                         soundFontItems,
+-                         /*includeInFilteredLists*/ false);
++    return items;
+ }
+ 
+ QVariantMap InputResourceItem::buildMsBasicMenuItem(const AudioResourceMetaList& availableResources, bool isCurrentSoundFont,
+@@ -502,14 +519,13 @@ QVariantMap InputResourceItem::buildMsBasicMenuItem(const AudioResourceMetaList&
+                          /*isFilterCategory*/ true);
+ }
+ 
+-QVariantMap InputResourceItem::buildSoundFontMenuItem(const muse::String& soundFont,
++QVariantList InputResourceItem::buildSoundFontSection(const muse::String& soundFont,
+                                                       const audio::AudioResourceMetaList& availableResources,
+                                                       bool isCurrentSoundFont,
+                                                       const std::optional<midi::Program>& currentPreset) const
+ {
+-    // Group resources by bank, and use this to sort them
+-    std::map<int, std::map<int, AudioResourceMeta> > resourcesByBank;
+-    AudioResourceMeta chooseAutomaticMeta;
++    // Order presets by bank, then program: the program numbers carry the font's intended order
++    std::map<midi::Program, AudioResourceMeta> resourcesByProgram;
+ 
+     for (const AudioResourceMeta& resourceMeta : availableResources) {
+         bool bankOk = false, programOk = false;
+@@ -517,54 +533,38 @@ QVariantMap InputResourceItem::buildSoundFontMenuItem(const muse::String& soundF
+         int presetProgram = resourceMeta.attributeVal(PRESET_PROGRAM_ATTRIBUTE).toInt(&programOk);
+ 
+         if (bankOk && programOk) {
+-            resourcesByBank[presetBank][presetProgram] = resourceMeta;
+-        } else {
+-            chooseAutomaticMeta = resourceMeta;
++            resourcesByProgram[midi::Program(presetBank, presetProgram)] = resourceMeta;
+         }
+     }
+ 
+-    QVariantList bankItems;
+-
+-    for (const auto& bankPair : resourcesByBank) {
+-        bool isCurrentBank = isCurrentSoundFont && currentPreset.has_value() && currentPreset.value().bank == bankPair.first;
+-
+-        QVariantList presetItems;
+-
+-        for (const auto& presetPair : bankPair.second) {
+-            bool isCurrentPreset = isCurrentBank && currentPreset.value().program == presetPair.first;
+-
+-            QString presetName = presetPair.second.attributeVal(PRESET_NAME_ATTRIBUTE);
+-            if (presetName.isEmpty()) {
+-                presetName = muse::qtrc("playback", "Preset %1").arg(presetPair.first);
+-            }
+-
+-            QString itemId = makeMenuResourceItemId(AudioResourceType::FluidSoundfont, QString::fromStdString(presetPair.second.id));
+-            presetItems << buildMenuItem(itemId,
+-                                         presetName,
+-                                         isCurrentPreset);
++    // A non-clickable header names the font; its presets follow as rows, so every sound is 1 click away
++    QVariantMap header;
++    header["id"] = (soundFont + u"\\section").toQString();
++    header["title"] = soundFont.toQString();
++    header["enabled"] = false;
++    header["checkable"] = false;
++    header["isSectionHeader"] = true;
++    header["includeInFilteredLists"] = false;
++    header["subitems"] = QVariantList();
++
++    QVariantList items;
++    items << header;
++
++    for (const auto& [program, resourceMeta] : resourcesByProgram) {
++        bool isCurrentPreset = isCurrentSoundFont && currentPreset.has_value() && currentPreset.value() == program;
++
++        QString presetName = resourceMeta.attributeVal(PRESET_NAME_ATTRIBUTE);
++        if (presetName.isEmpty()) {
++            presetName = muse::qtrc("playback", "Preset %1").arg(program.program);
+         }
+ 
+-        bankItems << buildMenuItem(soundFont + u"\\" + muse::String::number(bankPair.first),
+-                                   muse::qtrc("playback", "Bank %1").arg(bankPair.first),
+-                                   isCurrentBank,
+-                                   presetItems,
+-                                   /*includeInFilteredLists*/ false);
++        QString itemId = makeMenuResourceItemId(AudioResourceType::FluidSoundfont, QString::fromStdString(resourceMeta.id));
++        QVariantMap row = buildMenuItem(itemId, presetName, isCurrentPreset);
++        row["scrollTo"] = isCurrentPreset;
++        items << row;
+     }
+ 
+-    // Prepend the "Choose automatically" item
+-    bankItems.prepend(buildSeparator());
+-    bankItems.prepend(buildMenuItem(makeMenuResourceItemId(chooseAutomaticMeta.type, QString::fromStdString(chooseAutomaticMeta.id)),
+-                                    muse::qtrc("playback", "Choose automatically"),
+-                                    isCurrentSoundFont && !currentPreset.has_value(),
+-                                    /*subItems*/ QVariantList(),
+-                                    /*includeInFilteredLists*/ false));
+-
+-    return buildMenuItem(soundFont + u"\\menu",
+-                         soundFont,
+-                         isCurrentSoundFont,
+-                         bankItems,
+-                         /*includeInFilteredLists*/ false,
+-                         /*isFilterCategory*/ true);
++    return items;
+ }
+ 
+ void InputResourceItem::updateAvailableResources(const AudioResourceMetaList& availableResources)
+diff --git a/src/playback/qml/MuseScore/Playback/inputresourceitem.h b/src/playback/qml/MuseScore/Playback/inputresourceitem.h
+index c2c4973b..575b7d47 100644
+--- a/src/playback/qml/MuseScore/Playback/inputresourceitem.h
++++ b/src/playback/qml/MuseScore/Playback/inputresourceitem.h
+@@ -75,10 +75,10 @@ private:
+ 
+     QVariantMap buildMuseMenuItem(const ResourceByVendorMap& resourcesByVendor) const;
+     QVariantMap buildVstMenuItem(const ResourceByVendorMap& resourcesByVendor) const;
+-    QVariantMap buildSoundFontsMenuItem(const ResourceByVendorMap& resourcesByVendor) const;
++    QVariantList buildSoundFontItems(const ResourceByVendorMap& resourcesByVendor) const;
+     QVariantMap buildMsBasicMenuItem(const muse::audio::AudioResourceMetaList& availableResources, bool isCurrentSoundFont,
+                                      const std::optional<muse::midi::Program>& currentPreset) const;
+-    QVariantMap buildSoundFontMenuItem(const muse::String& soundFont, const muse::audio::AudioResourceMetaList& availableResources,
++    QVariantList buildSoundFontSection(const muse::String& soundFont, const muse::audio::AudioResourceMetaList& availableResources,
+                                        bool isCurrentSoundFont, const std::optional<muse::midi::Program>& currentPreset) const;
+ 
+     void updateAvailableResources(const muse::audio::AudioResourceMetaList& availableResources);
