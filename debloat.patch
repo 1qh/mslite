@@ -1,0 +1,484 @@
+diff --git a/ninja_build.sh b/ninja_build.sh
+index 8372715f..09a9eb28 100755
+--- a/ninja_build.sh
++++ b/ninja_build.sh
+@@ -104,7 +104,8 @@ function do_build() {
+         -DMUSE_MODULE_NETWORK_WEBSOCKET="${MUSESCORE_BUILD_WEBSOCKET}" \
+         -DMUSE_MODULE_AUDIO_PIPEWIRE="${MUSESCORE_BUILD_PIPEWIRE_AUDIO_DRIVER}" \
+         -DCMAKE_SKIP_RPATH="${MUSESCORE_NO_RPATH}" \
+-        -DMUSE_COMPILE_USE_UNITY="${MUSESCORE_COMPILE_USE_UNITY}"
++        -DMUSE_COMPILE_USE_UNITY="${MUSESCORE_COMPILE_USE_UNITY}" \
++        ${MUSESCORE_CMAKE_ARGS}
+ 
+     ninja -j $JOBS
+ }
+diff --git a/share/CMakeLists.txt b/share/CMakeLists.txt
+index 3154aefa..72ed75fd 100644
+--- a/share/CMakeLists.txt
++++ b/share/CMakeLists.txt
+@@ -18,19 +18,7 @@
+ # You should have received a copy of the GNU General Public License
+ # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ 
+-subdirs(autobotscripts icons templates wallpapers locale styles sound manual instruments)
+-
+-install (DIRECTORY
+-    plugins
+-    DESTINATION ${Mscore_SHARE_NAME}${Mscore_INSTALL_NAME}
+-    PATTERN ".*" EXCLUDE
+-    )
+-
+-install (DIRECTORY
+-    extensions
+-    DESTINATION ${Mscore_SHARE_NAME}${Mscore_INSTALL_NAME}
+-    PATTERN ".*" EXCLUDE
+-    )
++subdirs(icons styles manual instruments)
+ 
+ install (DIRECTORY
+     workspaces
+diff --git a/src/app/CMakeLists.txt b/src/app/CMakeLists.txt
+index 169be219..bf11089f 100644
+--- a/src/app/CMakeLists.txt
++++ b/src/app/CMakeLists.txt
+@@ -379,13 +379,10 @@ elseif(OS_IS_FBSD)
+ ###########################################
+ elseif(OS_IS_MAC)
+     install(FILES
+-            ${PROJECT_SOURCE_DIR}/fonts/bravura/BravuraText.otf
+-            ${PROJECT_SOURCE_DIR}/fonts/campania/Campania.otf
+             ${PROJECT_SOURCE_DIR}/fonts/edwin/Edwin-BdIta.otf
+             ${PROJECT_SOURCE_DIR}/fonts/edwin/Edwin-Bold.otf
+             ${PROJECT_SOURCE_DIR}/fonts/edwin/Edwin-Italic.otf
+             ${PROJECT_SOURCE_DIR}/fonts/edwin/Edwin-Roman.otf
+-            ${PROJECT_SOURCE_DIR}/fonts/gootville/GootvilleText.otf
+             ${PROJECT_SOURCE_DIR}/fonts/FreeSans.ttf
+             ${PROJECT_SOURCE_DIR}/fonts/FreeSerif.ttf
+             ${PROJECT_SOURCE_DIR}/fonts/FreeSerifBold.ttf
+@@ -396,11 +393,6 @@ elseif(OS_IS_MAC)
+             ${PROJECT_SOURCE_DIR}/fonts/mscore-BC.ttf
+             ${PROJECT_SOURCE_DIR}/fonts/mscoreTab.ttf
+             ${PROJECT_SOURCE_DIR}/fonts/mscore/MScoreText.otf
+-            ${PROJECT_SOURCE_DIR}/fonts/musejazz/MuseJazzText.otf
+-            ${PROJECT_SOURCE_DIR}/fonts/petaluma/PetalumaScript.otf
+-            ${PROJECT_SOURCE_DIR}/fonts/petaluma/PetalumaText.otf
+-            ${PROJECT_SOURCE_DIR}/fonts/finalemaestro/FinaleMaestroText-Regular.otf
+-            ${PROJECT_SOURCE_DIR}/fonts/finalebroadway/FinaleBroadwayText.otf
+             DESTINATION ${Mscore_SHARE_NAME}${Mscore_INSTALL_NAME}fonts
+     )
+ 
+diff --git a/src/app/configs/high_contrast_black.cfg b/src/app/configs/high_contrast_black.cfg
+index 5fa71b22..04d6a25c 100644
+--- a/src/app/configs/high_contrast_black.cfg
++++ b/src/app/configs/high_contrast_black.cfg
+@@ -3,10 +3,10 @@
+     "background_secondary_color": "#000000",
+     "popup_background_color": "#000000",
+     "text_field_color": "#000000",
+-    "accent_color": "#0071DA",
+-    "stroke_color": "#FFFFFF",
++    "accent_color": "#5E5E5E",
++    "stroke_color": "#212121",
+     "button_color": "#000000",
+-    "font_primary_color": "#FFFD38",
++    "font_primary_color": "#FFFFFF",
+     "font_secondary_color": "#BDBDBD",
+     "link_color": "#FFFFFF",
+     "focus_color": "#75507b",
+diff --git a/src/appshell/internal/appshellconfiguration.cpp b/src/appshell/internal/appshellconfiguration.cpp
+index 6c1316eb..dae51ed9 100644
+--- a/src/appshell/internal/appshellconfiguration.cpp
++++ b/src/appshell/internal/appshellconfiguration.cpp
+@@ -73,7 +73,7 @@ void AppShellConfiguration::init()
+ {
+     settings()->setDefaultValue(HAS_COMPLETED_FIRST_LAUNCH_SETUP, Val(false));
+ 
+-    settings()->setDefaultValue(WELCOME_DIALOG_SHOW_ON_STARTUP_KEY, Val(true));
++    settings()->setDefaultValue(WELCOME_DIALOG_SHOW_ON_STARTUP_KEY, Val(false));
+     settings()->valueChanged(WELCOME_DIALOG_SHOW_ON_STARTUP_KEY).onReceive(this, [this](const Val&) {
+         m_welcomeDialogShowOnStartupChanged.notify();
+     });
+diff --git a/src/appshell/internal/startupscenario.cpp b/src/appshell/internal/startupscenario.cpp
+index fad6a767..9d7c8394 100644
+--- a/src/appshell/internal/startupscenario.cpp
++++ b/src/appshell/internal/startupscenario.cpp
+@@ -253,6 +253,9 @@ void StartupScenario::showStartupDialogsIfNeed(StartupModeType modeType)
+     //! to show a MuseSounds update dialog (see ProjectActionsController::doFinishOpenProject). MuseSampler's update
+     //! dialog should be shown after the welcome dialog.
+     const auto showWelcomeDialogAndSamplerUpdateIfNeed = [this, modeType]() {
++        if (configuration()) {
++            return;
++        }
+         if (!configuration()->hasCompletedFirstLaunchSetup()) {
+             interactive()->open(FIRST_LAUNCH_SETUP_URI);
+             return;
+diff --git a/src/appshell/qml/MuseScore/AppShell/HomePage/HomeMenu.qml b/src/appshell/qml/MuseScore/AppShell/HomePage/HomeMenu.qml
+index 32d743d8..3e50fe85 100644
+--- a/src/appshell/qml/MuseScore/AppShell/HomePage/HomeMenu.qml
++++ b/src/appshell/qml/MuseScore/AppShell/HomePage/HomeMenu.qml
+@@ -62,6 +62,7 @@ Item {
+         spacing: 0
+ 
+         AccountInfoButton {
++            visible: false
+             Layout.fillWidth: true
+             Layout.preferredHeight: 60
+             Layout.topMargin: 20
+@@ -88,10 +89,7 @@ Item {
+             spacing: 0
+ 
+             model: [
+-                { "name": "scores", "title": qsTrc("appshell", "Scores"), "iconCode": IconCode.MUSIC_NOTES },
+-                { "name": "extensions", "title": qsTrc("appshell", "Plugins"), "iconCode":  IconCode.PLUGIN },
+-                { "name": "musesounds", "title": qsTrc("appshell", "MuseSounds"), "iconCode": IconCode.PLAY },
+-                { "name": "learn", "title": qsTrc("appshell", "Learn"), "iconCode":  IconCode.MORTAR_BOARD }
++                { "name": "scores", "title": qsTrc("appshell", "Scores"), "iconCode": IconCode.MUSIC_NOTES }
+             ]
+ 
+             currentIndex: 0
+diff --git a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
+index dd4b7cf8..b044a56c 100644
+--- a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
++++ b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
+@@ -460,8 +460,7 @@ DockPage {
+ 
+             groupName: root.horizontalPanelsGroup
+ 
+-            //! NOTE: hidden by default
+-            visible: false
++            visible: true
+ 
+             location: Location.Bottom
+ 
+diff --git a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationStatusBar.qml b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationStatusBar.qml
+index 4b893445..9f825047 100644
+--- a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationStatusBar.qml
++++ b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationStatusBar.qml
+@@ -109,6 +109,7 @@ Item {
+ 
+         OnlineSoundsStatusView {
+             id: onlineSoundsStatusView
++            visible: false
+ 
+             Layout.alignment: Qt.AlignVCenter
+             Layout.preferredHeight: 28
+diff --git a/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp b/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp
+index 939c8162..bea9c419 100644
+--- a/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp
++++ b/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp
+@@ -73,16 +73,9 @@ void AppMenuModel::load()
+         makeAddMenu(),
+         makeFormatMenu(),
+         makeToolsMenu(),
+-        makePluginsMenu()
++        makeHelpMenu(false)
+     };
+ 
+-    if (globalConfiguration()->devModeEnabled()) {
+-        items << makeHelpMenu(false);
+-        items << makeDiagnosticsMenu();
+-    } else {
+-        items << makeHelpMenu(true);
+-    }
+-
+     setItems(items);
+ 
+     setupConnections();
+@@ -204,9 +197,7 @@ MenuItem* AppMenuModel::makeFileMenu()
+         makeSeparator(),
+         makeMenuItem("file-save"),
+         makeMenuItem("file-save-as"),
+-        makeMenuItem("file-save-to-cloud"),
+         makeMenu(TranslatableString("appshell/menu/file", "Save o&ther"), makeSaveOtherSubItems()),
+-        makeMenu(TranslatableString("appshell/menu/file", "Pu&blish online"), makePublishOnlineSubItems()),
+         makeSeparator(),
+         makeMenuItem("file-convert-to-score"),
+         makeMenuItem("file-export"),
+@@ -449,35 +440,10 @@ MenuItemList AppMenuModel::makePluginsMenuSubitems()
+ 
+ MenuItem* AppMenuModel::makeHelpMenu(bool addDiagnosticsSubMenu)
+ {
++    UNUSED(addDiagnosticsSubMenu);
+     MenuItemList helpItems;
+-
+-    if (updateConfiguration()->isAppUpdatable()) {
+-        helpItems << makeMenuItem("check-update");
+-        helpItems << makeSeparator();
+-    }
+-
+-    helpItems << makeMenuItem("online-handbook");
+-    helpItems << makeMenuItem("ask-help");
+-    helpItems << makeSeparator();
+-
+-    if (addDiagnosticsSubMenu) {
+-        helpItems << makeDiagnosticsMenu();
+-        helpItems << makeSeparator();
+-    }
+-
+     helpItems << makeMenuItem("about-musescore", MenuItemRole::AboutRole);
+-    helpItems << makeMenuItem("about-qt", MenuItemRole::AboutQtRole);
+-    helpItems << makeMenuItem("about-musicxml");
+-    helpItems << makeMenuItem("accessibility-statement");
+     helpItems << makeSeparator();
+-
+-#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+-    if (isMuseSamplerModuleAdded()) {
+-        helpItems << makeMenuItem("clear-online-sounds-cache");
+-        helpItems << makeSeparator();
+-    }
+-#endif
+-
+     helpItems << makeMenuItem("revert-factory");
+ 
+     return makeMenu(TranslatableString("appshell/menu/help", "&Help"), helpItems, "menu-help");
+diff --git a/src/appshell/qml/MuseScore/AppShell/maintoolbarmodel.cpp b/src/appshell/qml/MuseScore/AppShell/maintoolbarmodel.cpp
+index f3a27ddc..9c7029b8 100644
+--- a/src/appshell/qml/MuseScore/AppShell/maintoolbarmodel.cpp
++++ b/src/appshell/qml/MuseScore/AppShell/maintoolbarmodel.cpp
+@@ -29,8 +29,6 @@ using namespace mu::appshell;
+ static const QString HOME_PAGE("musescore://home");
+ static const QString NOTATION_PAGE("musescore://notation");
+ static const QString NOTATION_REVIEW_PAGE("musescore://notation/review");
+-static const QString PUBLISH_PAGE("musescore://publish");
+-static const QString DEVTOOLS_PAGE("musescore://devtools");
+ 
+ static const QString TITLE_KEY("title");
+ static const QString URI_KEY("uri");
+@@ -104,11 +102,6 @@ void MainToolBarModel::load()
+     m_items.clear();
+     m_items << buildItem(muse::qtrc("appshell", "Home"), HOME_PAGE, m_currentUri);
+     m_items << buildItem(muse::qtrc("appshell", "Score"), NOTATION_PAGE, m_currentUri);
+-    m_items << buildItem(muse::qtrc("appshell", "Publish"), PUBLISH_PAGE, m_currentUri);
+-
+-    if (globalConfiguration()->devModeEnabled()) {
+-        m_items << buildItem(muse::qtrc("appshell", "DevTools"), DEVTOOLS_PAGE, m_currentUri);
+-    }
+ 
+     endResetModel();
+ 
+diff --git a/src/braille/thirdparty/liblouis/CMakeLists.txt b/src/braille/thirdparty/liblouis/CMakeLists.txt
+index 229b9025..3115f37c 100644
+--- a/src/braille/thirdparty/liblouis/CMakeLists.txt
++++ b/src/braille/thirdparty/liblouis/CMakeLists.txt
+@@ -1,6 +1,5 @@
+ muse_create_thirdparty_module(liblouis)
+ 
+-add_subdirectory(tables)
+ 
+ target_compile_definitions(liblouis PRIVATE
+     TABLESDIR=dataPathPtr           # compileTranslationTable.c
+diff --git a/src/framework/global/internal/interactive.cpp b/src/framework/global/internal/interactive.cpp
+index 6116cb3f..ec211025 100644
+--- a/src/framework/global/internal/interactive.cpp
++++ b/src/framework/global/internal/interactive.cpp
+@@ -530,6 +530,9 @@ Ret Interactive::openUrl(const std::string& url) const
+ 
+ Ret Interactive::openUrl(const QUrl& url) const
+ {
++    if (!url.isLocalFile()) {
++        return make_ret(Ret::Code::NotSupported);
++    }
+     return QDesktopServices::openUrl(url);
+ }
+ 
+diff --git a/src/framework/network/internal/networkmanager.cpp b/src/framework/network/internal/networkmanager.cpp
+index 35b20ef2..368fed76 100644
+--- a/src/framework/network/internal/networkmanager.cpp
++++ b/src/framework/network/internal/networkmanager.cpp
+@@ -125,6 +125,10 @@ RetVal<Progress> NetworkManager::execRequest(RequestType requestType, const QUrl
+                                              OutgoingDeviceVar outgoingData,
+                                              const RequestHeaders& headers)
+ {
++    if (!url.isLocalFile()) {
++        return RetVal<Progress>::make_ret((int)Err::NetworkError);
++    }
++
+     if (std::holds_alternative<QIODevicePtr>(outgoingData)) {
+         if (!openDevice(std::get<QIODevicePtr>(outgoingData), QIODevice::ReadOnly)) {
+             return RetVal<Progress>::make_ret((int)Err::FiledOpenIODeviceRead);
+diff --git a/src/framework/tours/internal/toursservice.cpp b/src/framework/tours/internal/toursservice.cpp
+index c2bac2d8..a8854bcf 100644
+--- a/src/framework/tours/internal/toursservice.cpp
++++ b/src/framework/tours/internal/toursservice.cpp
+@@ -34,6 +34,9 @@ void ToursService::registerTour(const String& eventCode, const Tour& tour)
+ 
+ void ToursService::onEvent(const String& eventCode)
+ {
++    if (!eventCode.isEmpty()) {
++        return;
++    }
+     if (!muse::contains(m_eventsMap, eventCode)) {
+         return;
+     }
+diff --git a/src/framework/ui/internal/qmlnetworkaccessmanagerfactory.cpp b/src/framework/ui/internal/qmlnetworkaccessmanagerfactory.cpp
+index 00279e9f..8bff88ec 100644
+--- a/src/framework/ui/internal/qmlnetworkaccessmanagerfactory.cpp
++++ b/src/framework/ui/internal/qmlnetworkaccessmanagerfactory.cpp
+@@ -27,6 +27,10 @@ using namespace muse::ui;
+ QNetworkReply* QmlNetworkAccessManager::createRequest(Operation operation, const QNetworkRequest& originalRequest, QIODevice* outgoingData)
+ {
+     QNetworkRequest request(originalRequest);
++    const QString scheme = request.url().scheme();
++    if (scheme != "file" && scheme != "qrc" && scheme != "data") {
++        request.setUrl(QUrl("data:,"));
++    }
+     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, true);
+ 
+     muse::network::RequestHeaders _headers = networkConfiguration()->defaultHeaders();
+diff --git a/src/framework/ui/internal/uiconfiguration.cpp b/src/framework/ui/internal/uiconfiguration.cpp
+index 5fec67ae..ec86e3a3 100644
+--- a/src/framework/ui/internal/uiconfiguration.cpp
++++ b/src/framework/ui/internal/uiconfiguration.cpp
+@@ -89,7 +89,7 @@ void UiConfiguration::init()
+ {
+     m_config = ConfigReader::read(":/configs/ui.cfg");
+ 
+-    settings()->setDefaultValue(UI_CURRENT_THEME_CODE_KEY, Val(LIGHT_THEME_CODE));
++    settings()->setDefaultValue(UI_CURRENT_THEME_CODE_KEY, Val(HIGH_CONTRAST_BLACK_THEME_CODE));
+     settings()->setDefaultValue(UI_CUSTOM_COLORS_KEY, Val(readLegacyCustomColors()));
+     settings()->setDefaultValue(UI_FOLLOW_SYSTEM_THEME_KEY, Val(false));
+     settings()->setDefaultValue(UI_FONT_FAMILY_KEY, Val(defaultFontFamily()));
+diff --git a/src/notation/internal/notationconfiguration.cpp b/src/notation/internal/notationconfiguration.cpp
+index 32155614..7328a5df 100644
+--- a/src/notation/internal/notationconfiguration.cpp
++++ b/src/notation/internal/notationconfiguration.cpp
+@@ -167,7 +167,7 @@ void NotationConfiguration::init()
+         m_foregroundChanged.notify();
+     });
+ 
+-    settings()->setDefaultValue(INVERT_SCORE_COLOR, Val(false));
++    settings()->setDefaultValue(INVERT_SCORE_COLOR, Val(true));
+     settings()->valueChanged(INVERT_SCORE_COLOR).onReceive(nullptr, [this](const Val&) {
+         m_scoreInversionChanged.notify();
+         m_foregroundChanged.notify();
+diff --git a/src/preferences/qml/MuseScore/Preferences/AudioMidiPreferencesPage.qml b/src/preferences/qml/MuseScore/Preferences/AudioMidiPreferencesPage.qml
+index aefdb619..1acd1832 100644
+--- a/src/preferences/qml/MuseScore/Preferences/AudioMidiPreferencesPage.qml
++++ b/src/preferences/qml/MuseScore/Preferences/AudioMidiPreferencesPage.qml
+@@ -111,7 +111,7 @@ PreferencesPage {
+         OnlineSoundsSection {
+             id: onlineSoundsSection
+ 
+-            visible: audioMidiModel.onlineSoundsSectionVisible()
++            visible: false
+ 
+             showErrorDialog: audioMidiModel.shouldShowOnlineSoundsProcessingError
+             autoProcessOnlineSoundsInBackground: audioMidiModel.autoProcessOnlineSoundsInBackground
+diff --git a/src/preferences/qml/MuseScore/Preferences/SaveAndPublishPreferencesPage.qml b/src/preferences/qml/MuseScore/Preferences/SaveAndPublishPreferencesPage.qml
+index 758d4937..e4c343b7 100644
+--- a/src/preferences/qml/MuseScore/Preferences/SaveAndPublishPreferencesPage.qml
++++ b/src/preferences/qml/MuseScore/Preferences/SaveAndPublishPreferencesPage.qml
+@@ -57,16 +57,18 @@ PreferencesPage {
+             }
+         }
+ 
+-        SeparatorLine { }
++        SeparatorLine { visible: false }
+ 
+         SaveToCloudSection {
++            visible: false
+             navigation.section: root.navigationSection
+             navigation.order: root.navigationOrderStart + 2
+         }
+ 
+-        SeparatorLine { }
++        SeparatorLine { visible: false }
+ 
+         PublishMuseScoreComSection {
++            visible: false
+             alsoShareAudioCom: preferencesModel.alsoShareAudioCom
+ 
+             navigation.section: root.navigationSection
+diff --git a/src/preferences/qml/MuseScore/Preferences/preferencesmodel.cpp b/src/preferences/qml/MuseScore/Preferences/preferencesmodel.cpp
+index b0ad77d1..dd3ae427 100644
+--- a/src/preferences/qml/MuseScore/Preferences/preferencesmodel.cpp
++++ b/src/preferences/qml/MuseScore/Preferences/preferencesmodel.cpp
+@@ -175,14 +175,6 @@ void PreferencesModel::load(const QString& currentPageId)
+         makeItem("audio-midi", QT_TRANSLATE_NOOP("preferences", "Audio & MIDI"), IconCode::Code::AUDIO,
+                  "Preferences/AudioMidiPreferencesPage.qml"),
+ 
+-#ifdef MUSE_MODULE_MIDIREMOTE
+-        makeItem("midi-device-mapping", QT_TRANSLATE_NOOP("preferences", "MIDI mappings"), IconCode::Code::MIDI_INPUT,
+-                 "Preferences/MidiDeviceMappingPreferencesPage.qml"),
+-#endif
+-
+-        makeItem("video", QT_TRANSLATE_NOOP("preferences", "Video"), IconCode::Code::VIDEO,
+-                 "Preferences/VideoPreferencesPage.qml"),
+-
+         makeItem("percussion", QT_TRANSLATE_NOOP("preferences", "Percussion"), IconCode::Code::PERCUSSION,
+                  "Preferences/PercussionPreferencesPage.qml"),
+ 
+@@ -196,10 +188,7 @@ void PreferencesModel::load(const QString& currentPageId)
+                  "Preferences/FoldersPreferencesPage.qml"),
+ 
+         makeItem("advanced", QT_TRANSLATE_NOOP("preferences", "Advanced"), IconCode::Code::CONFIGURE,
+-                 "Preferences/AdvancedPreferencesPage.qml"),
+-
+-        makeItem("braille", QT_TRANSLATE_NOOP("preferences", "Braille"), IconCode::Code::BRAILLE,
+-                 "Preferences/BraillePreferencesPage.qml")
++                 "Preferences/AdvancedPreferencesPage.qml")
+     };
+ 
+     for (PreferencePageItem* item: items) {
+diff --git a/src/project/internal/projectconfiguration.cpp b/src/project/internal/projectconfiguration.cpp
+index 5e99a504..bc20c65f 100644
+--- a/src/project/internal/projectconfiguration.cpp
++++ b/src/project/internal/projectconfiguration.cpp
+@@ -282,7 +282,7 @@ muse::io::path_t ProjectConfiguration::defaultConvertFilePath() const
+ 
+ bool ProjectConfiguration::shouldAskSaveLocationType() const
+ {
+-    return settings()->value(SHOULD_ASK_SAVE_LOCATION_TYPE).toBool();
++    return false;
+ }
+ 
+ void ProjectConfiguration::setShouldAskSaveLocationType(bool shouldAsk)
+@@ -420,7 +420,7 @@ std::string ProjectConfiguration::uniqueFileNameAddition(const io::path_t& filen
+ 
+ SaveLocationType ProjectConfiguration::lastUsedSaveLocationType() const
+ {
+-    return settings()->value(LAST_USED_SAVE_LOCATION_TYPE).toEnum<SaveLocationType>();
++    return SaveLocationType::Local;
+ }
+ 
+ void ProjectConfiguration::setLastUsedSaveLocationType(SaveLocationType type)
+diff --git a/src/project/qml/MuseScore/Project/ScoresPage.qml b/src/project/qml/MuseScore/Project/ScoresPage.qml
+index 9b8ec9c4..3376e4cc 100644
+--- a/src/project/qml/MuseScore/Project/ScoresPage.qml
++++ b/src/project/qml/MuseScore/Project/ScoresPage.qml
+@@ -181,6 +181,7 @@ FocusScope {
+ 
+             StyledTabButton {
+                 text: qsTrc("project", "My online scores")
++                visible: false
+ 
+                 navigation.name: "MyOnlineScores"
+                 navigation.panel: navTabPanel
+@@ -378,6 +379,7 @@ FocusScope {
+ 
+             minWidth: 216
+             text: qsTrc("project", "Score manager (online)")
++            visible: false
+ 
+             onClicked: {
+                 scoresPageModel.openScoreManager()
+diff --git a/version.cmake b/version.cmake
+index 1e320882..52983758 100644
+--- a/version.cmake
++++ b/version.cmake
+@@ -18,13 +18,13 @@
+ # You should have received a copy of the GNU General Public License
+ # along with this program.  If not, see <https://www.gnu.org/licenses/>. 
+ 
+-set(MUSE_APP_NAME_HUMAN_READABLE "MuseScore Studio")
++set(MUSE_APP_NAME_HUMAN_READABLE "MuseScoreLite")
+ set(MUSE_APP_NAME_MACHINE_READABLE "MuseScoreStudio")
+ 
+ set(MUSE_APP_NAME_HUMAN_READABLE_COMPAT "MuseScore")
+ set(MUSE_APP_NAME_MACHINE_READABLE_COMPAT "MuseScore")
+ 
+-set(MUSE_APP_GUI_IDENTIFIER org.musescore.${MUSE_APP_NAME_MACHINE_READABLE_COMPAT})
++set(MUSE_APP_GUI_IDENTIFIER org.musescore.MuseScoreLite)
+ 
+ set(MUSE_APP_VERSION_MAJOR "4")
+ set(MUSE_APP_VERSION_MINOR "7")

@@ -1,0 +1,2431 @@
+diff --git a/src/engraving/playback/playback.cmake b/src/engraving/playback/playback.cmake
+index 6377eb8e..8d8a275c 100644
+--- a/src/engraving/playback/playback.cmake
++++ b/src/engraving/playback/playback.cmake
+@@ -24,6 +24,8 @@ set(PLAYBACK_SRC
+     ${CMAKE_CURRENT_LIST_DIR}/playbackcontext.h
+     ${CMAKE_CURRENT_LIST_DIR}/playbackmodel.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/playbackmodel.h
++    ${CMAKE_CURRENT_LIST_DIR}/playbacknoteindex.cpp
++    ${CMAKE_CURRENT_LIST_DIR}/playbacknoteindex.h
+     ${CMAKE_CURRENT_LIST_DIR}/playbackeventsrenderer.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/playbackeventsrenderer.h
+     ${CMAKE_CURRENT_LIST_DIR}/playbacksetupdataresolver.cpp
+diff --git a/src/engraving/playback/playbackmodel.cpp b/src/engraving/playback/playbackmodel.cpp
+index 9fe4eff1..28648010 100644
+--- a/src/engraving/playback/playbackmodel.cpp
++++ b/src/engraving/playback/playbackmodel.cpp
+@@ -65,6 +65,9 @@ static const Harmony* findChordSymbol(const EngravingItem* item)
+ void PlaybackModel::load(Score* score)
+ {
+     TRACEFUNC;
++    //! NOTE: PlaybackModel is initialized once per notation. Score changes after initialization
++    //! are handled incrementally below, or wholesale by reload().
++    invalidateActivePlaybackPitches();
+ 
+     if (!score || score->measures()->empty() || !score->lastMeasure()) {
+         return;
+@@ -110,6 +113,7 @@ void PlaybackModel::load(Score* score)
+ 
+ void PlaybackModel::reload()
+ {
++    invalidateActivePlaybackPitches();
+     if (!m_score) {
+         return;
+     }
+@@ -249,7 +253,12 @@ bool PlaybackModel::hasSoundFlags(const InstrumentTrackId& trackId) const
+     return search->second->hasSoundFlags();
+ }
+ 
+-PlaybackData& PlaybackModel::resolveTrackPlaybackData(const InstrumentTrackId& trackId)
++const PlaybackData& PlaybackModel::resolveTrackPlaybackData(const InstrumentTrackId& trackId)
++{
++    return resolveTrackPlaybackDataMutable(trackId);
++}
++
++PlaybackData& PlaybackModel::resolveTrackPlaybackDataMutable(const InstrumentTrackId& trackId)
+ {
+     auto search = m_playbackDataMap.find(trackId);
+ 
+@@ -269,11 +278,43 @@ PlaybackData& PlaybackModel::resolveTrackPlaybackData(const InstrumentTrackId& t
+     return m_playbackDataMap[trackId];
+ }
+ 
+-PlaybackData& PlaybackModel::resolveTrackPlaybackData(const ID& partId, const String& instrumentId)
++const PlaybackData& PlaybackModel::resolveTrackPlaybackData(const ID& partId, const String& instrumentId)
+ {
+     return resolveTrackPlaybackData(idKey(partId, instrumentId));
+ }
+ 
++void PlaybackModel::sendOffStreamEvents(const InstrumentTrackId& trackId, const PlaybackEventsMap& events,
++                                        const DynamicLevelLayers& dynamics, bool flushSound)
++{
++    PlaybackData& data = resolveTrackPlaybackDataMutable(trackId);
++    data.offStream.send(events, dynamics, flushSound);
++}
++
++std::vector<muse::midi::note_idx_t> PlaybackModel::activePlaybackPitches(timestamp_t timestamp,
++                                                                         const InstrumentTrackIdSet& includedTracks) const
++{
++    if (m_activePlaybackNoteIndexDirty || m_indexedPlaybackTracks != includedTracks) {
++        m_activePlaybackNoteIndex.clear();
++
++        for (const InstrumentTrackId& trackId : includedTracks) {
++            if (trackId == METRONOME_TRACK_ID) {
++                continue;
++            }
++
++            const auto playbackData = m_playbackDataMap.find(trackId);
++            if (playbackData != m_playbackDataMap.cend()) {
++                m_activePlaybackNoteIndex.add(playbackData->second.originEvents);
++            }
++        }
++
++        m_activePlaybackNoteIndex.finalize();
++        m_indexedPlaybackTracks = includedTracks;
++        m_activePlaybackNoteIndexDirty = false;
++    }
++
++    return m_activePlaybackNoteIndex.activePitches(timestamp);
++}
++
+ void PlaybackModel::triggerEventsForItems(const std::vector<const EngravingItem*>& items, muse::mpe::duration_t duration, bool flushSound)
+ {
+     if (items.empty()) {
+@@ -399,6 +440,7 @@ muse::async::Channel<InstrumentTrackId> PlaybackModel::trackRemoved() const
+ void PlaybackModel::update(const int tickFrom, const int tickTo, const track_idx_t trackFrom, const track_idx_t trackTo,
+                            ChangedTrackIdSet* trackChanges)
+ {
++    invalidateActivePlaybackPitches();
+     updateSetupData();
+     updateContext(trackFrom, trackTo);
+     updateEvents(tickFrom, tickTo, trackFrom, trackTo, trackChanges);
+@@ -673,6 +715,7 @@ void PlaybackModel::updateEvents(const int tickFrom, const int tickTo, const tra
+ void PlaybackModel::reloadMetronomeEvents()
+ {
+     TRACEFUNC;
++    invalidateActivePlaybackPitches();
+ 
+     PlaybackData& metronomeData = m_playbackDataMap[METRONOME_TRACK_ID];
+     metronomeData.originEvents.clear();
+@@ -786,6 +829,7 @@ bool PlaybackModel::hasToReloadScore(const ScoreChanges& changes) const
+ 
+ void PlaybackModel::clearExpiredTracks()
+ {
++    invalidateActivePlaybackPitches();
+     auto needRemoveTrack = [this](const InstrumentTrackId& trackId) {
+         const Part* part = m_score->partById(trackId.partId.toUint64());
+ 
+@@ -967,6 +1011,8 @@ void PlaybackModel::removeTrackEvents(const InstrumentTrackId& trackId, const mu
+         return;
+     }
+ 
++    invalidateActivePlaybackPitches();
++
+     PlaybackData& trackPlaybackData = search->second;
+     const size_t oldSize = trackPlaybackData.originEvents.size();
+ 
+@@ -1173,6 +1219,11 @@ muse::mpe::ArticulationsProfilePtr PlaybackModel::defaultActiculationProfile(con
+     return profilesRepository()->defaultProfile(it->second.setupData.category);
+ }
+ 
++void PlaybackModel::invalidateActivePlaybackPitches()
++{
++    m_activePlaybackNoteIndexDirty = true;
++}
++
+ PlaybackContextPtr PlaybackModel::playbackCtx(const InstrumentTrackId& trackId)
+ {
+     auto it = m_playbackCtxMap.find(trackId);
+diff --git a/src/engraving/playback/playbackmodel.h b/src/engraving/playback/playbackmodel.h
+index bcbd9218..9980c660 100644
+--- a/src/engraving/playback/playbackmodel.h
++++ b/src/engraving/playback/playbackmodel.h
+@@ -36,6 +36,7 @@
+ 
+ #include "../types/types.h"
+ #include "playbackeventsrenderer.h"
++#include "playbacknoteindex.h"
+ #include "playbacksetupdataresolver.h"
+ #include "playbackcontext.h"
+ 
+@@ -82,8 +83,13 @@ public:
+ 
+     bool hasSoundFlags(const InstrumentTrackId& trackId) const;
+ 
+-    muse::mpe::PlaybackData& resolveTrackPlaybackData(const InstrumentTrackId& trackId);
+-    muse::mpe::PlaybackData& resolveTrackPlaybackData(const ID& partId, const String& instrumentId);
++    const muse::mpe::PlaybackData& resolveTrackPlaybackData(const InstrumentTrackId& trackId);
++    const muse::mpe::PlaybackData& resolveTrackPlaybackData(const ID& partId, const String& instrumentId);
++    void sendOffStreamEvents(const InstrumentTrackId& trackId, const muse::mpe::PlaybackEventsMap& events,
++                             const muse::mpe::DynamicLevelLayers& dynamics, bool flushSound);
++
++    std::vector<muse::midi::note_idx_t> activePlaybackPitches(muse::mpe::timestamp_t timestamp,
++                                                              const InstrumentTrackIdSet& includedTracks) const;
+ 
+     void triggerEventsForItems(const std::vector<const EngravingItem*>& items, muse::mpe::duration_t duration, bool flushSound);
+     void triggerMetronome(int tick);
+@@ -114,6 +120,7 @@ private:
+     InstrumentTrackId idKey(const EngravingItem* item) const;
+     InstrumentTrackId idKey(const std::vector<const EngravingItem*>& items) const;
+     InstrumentTrackId idKey(const ID& partId, const String& instrumentId) const;
++    muse::mpe::PlaybackData& resolveTrackPlaybackDataMutable(const InstrumentTrackId& trackId);
+ 
+     void update(const int tickFrom, const int tickTo, const track_idx_t trackFrom, const track_idx_t trackTo,
+                 ChangedTrackIdSet* trackChanges = nullptr);
+@@ -155,6 +162,7 @@ private:
+     const RepeatList& repeatList() const;
+ 
+     muse::mpe::ArticulationsProfilePtr defaultActiculationProfile(const InstrumentTrackId& trackId) const;
++    void invalidateActivePlaybackPitches();
+ 
+     PlaybackContextPtr playbackCtx(const InstrumentTrackId& trackId);
+ 
+@@ -174,6 +182,10 @@ private:
+     std::unordered_map<InstrumentTrackId, muse::mpe::PlaybackData> m_playbackDataMap;
+     std::unordered_map<InstrumentTrackId, bool> m_sendEventsOnScoreChangeMap;
+ 
++    mutable PlaybackNoteIndex m_activePlaybackNoteIndex;
++    mutable InstrumentTrackIdSet m_indexedPlaybackTracks;
++    mutable bool m_activePlaybackNoteIndexDirty = true;
++
+     InstrumentTrackIdSet m_changedTrackIdSet;
+ 
+     muse::async::Channel<InstrumentTrackIdSet> m_tracksDataChanged;
+diff --git a/src/engraving/playback/playbacknoteindex.cpp b/src/engraving/playback/playbacknoteindex.cpp
+new file mode 100644
+index 00000000..19c04393
+--- /dev/null
++++ b/src/engraving/playback/playbacknoteindex.cpp
+@@ -0,0 +1,140 @@
++/*
++ * SPDX-License-Identifier: GPL-3.0-only
++ * MuseScore-Studio-CLA-applies
++ *
++ * MuseScore Studio
++ * Music Composition & Notation
++ *
++ * Copyright (C) 2026 MuseScore Limited and others
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 3 as
++ * published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++#include "playbacknoteindex.h"
++
++#include <algorithm>
++#include <iterator>
++#include <limits>
++
++#include "realfn.h"
++
++using namespace mu::engraving;
++using namespace muse::mpe;
++
++void PlaybackNoteIndex::clear()
++{
++    for (std::vector<Interval>& intervals : m_intervals) {
++        intervals.clear();
++    }
++}
++
++void PlaybackNoteIndex::add(const PlaybackEventsMap& events)
++{
++    constexpr timestamp_t MAX_TIMESTAMP = std::numeric_limits<timestamp_t>::max();
++
++    for (const auto& [eventTimestamp, eventList] : events) {
++        (void)eventTimestamp;
++
++        for (const PlaybackEvent& event : eventList) {
++            const muse::mpe::NoteEvent* noteEvent = std::get_if<muse::mpe::NoteEvent>(&event);
++            if (!noteEvent) {
++                continue;
++            }
++
++            const ArrangementContext& arrangement = noteEvent->arrangementCtx();
++            if (arrangement.actualDuration <= 0) {
++                continue;
++            }
++
++            const float pitchSteps = ZERO_PITCH_LEVEL_MIDI_EQUIVALENT
++                                     + noteEvent->pitchCtx().nominalPitchLevel / static_cast<float>(PITCH_LEVEL_STEP);
++            //! NOTE: The keyboard cannot represent tuning offsets, so show the nearest equal-tempered key,
++            //! matching MuseSampler's pitch carrier selection.
++            const int pitch = muse::RealRound(pitchSteps, 0);
++            if (pitch < 0 || pitch > 127) {
++                continue;
++            }
++
++            const bool openEnded = arrangement.actualDuration == INFINITE_DURATION;
++            timestamp_t end = MAX_TIMESTAMP;
++            if (!openEnded && arrangement.actualTimestamp <= MAX_TIMESTAMP - arrangement.actualDuration) {
++                //! NOTE: duration is positive here, so a negative timestamp can be added safely.
++                //! Keep finite overflowing intervals saturated at MAX_TIMESTAMP.
++                end = arrangement.actualTimestamp + arrangement.actualDuration;
++            }
++
++            if (!openEnded && end <= arrangement.actualTimestamp) {
++                continue;
++            }
++
++            m_intervals[static_cast<size_t>(pitch)].push_back({
++                arrangement.actualTimestamp,
++                end,
++                openEnded
++            });
++        }
++    }
++}
++
++void PlaybackNoteIndex::finalize()
++{
++    for (std::vector<Interval>& intervals : m_intervals) {
++        if (intervals.empty()) {
++            continue;
++        }
++
++        std::sort(intervals.begin(), intervals.end(), [](const Interval& left, const Interval& right) {
++            return left.start < right.start || (left.start == right.start && left.end < right.end);
++        });
++
++        size_t mergedSize = 1;
++        for (size_t i = 1; i < intervals.size(); ++i) {
++            Interval& merged = intervals[mergedSize - 1];
++            const Interval& current = intervals[i];
++
++            if (merged.openEnded || current.start <= merged.end) {
++                merged.end = std::max(merged.end, current.end);
++                merged.openEnded = merged.openEnded || current.openEnded;
++                continue;
++            }
++
++            intervals[mergedSize++] = current;
++        }
++
++        intervals.resize(mergedSize);
++    }
++}
++
++std::vector<muse::midi::note_idx_t> PlaybackNoteIndex::activePitches(timestamp_t timestamp) const
++{
++    std::vector<muse::midi::note_idx_t> result;
++
++    for (size_t pitch = 0; pitch < m_intervals.size(); ++pitch) {
++        const std::vector<Interval>& intervals = m_intervals[pitch];
++        const auto upperBound = std::upper_bound(intervals.cbegin(), intervals.cend(), timestamp,
++                                                 [](timestamp_t value, const Interval& interval) {
++            return value < interval.start;
++        });
++
++        if (upperBound == intervals.cbegin()) {
++            continue;
++        }
++
++        const Interval& candidate = *std::prev(upperBound);
++        if (candidate.openEnded || timestamp < candidate.end) {
++            result.push_back(static_cast<muse::midi::note_idx_t>(pitch));
++        }
++    }
++
++    return result;
++}
+diff --git a/src/engraving/playback/playbacknoteindex.h b/src/engraving/playback/playbacknoteindex.h
+new file mode 100644
+index 00000000..785c29d5
+--- /dev/null
++++ b/src/engraving/playback/playbacknoteindex.h
+@@ -0,0 +1,53 @@
++/*
++ * SPDX-License-Identifier: GPL-3.0-only
++ * MuseScore-Studio-CLA-applies
++ *
++ * MuseScore Studio
++ * Music Composition & Notation
++ *
++ * Copyright (C) 2026 MuseScore Limited and others
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 3 as
++ * published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++#pragma once
++
++#include <array>
++#include <cstddef>
++#include <vector>
++
++#include "midi/miditypes.h"
++#include "mpe/events.h"
++
++namespace mu::engraving {
++class PlaybackNoteIndex
++{
++public:
++    void clear();
++    void add(const muse::mpe::PlaybackEventsMap& events);
++    void finalize();
++
++    std::vector<muse::midi::note_idx_t> activePitches(muse::mpe::timestamp_t timestamp) const;
++
++private:
++    struct Interval
++    {
++        muse::mpe::timestamp_t start = 0;
++        muse::mpe::timestamp_t end = 0;
++        bool openEnded = false;
++    };
++
++    static constexpr size_t PITCH_COUNT = 128;
++    std::array<std::vector<Interval>, PITCH_COUNT> m_intervals;
++};
++}
+diff --git a/src/engraving/tests/playback/playbackmodel_tests.cpp b/src/engraving/tests/playback/playbackmodel_tests.cpp
+index cac5e548..97b32f5c 100644
+--- a/src/engraving/tests/playback/playbackmodel_tests.cpp
++++ b/src/engraving/tests/playback/playbackmodel_tests.cpp
+@@ -22,6 +22,7 @@
+ 
+ #include <gtest/gtest.h>
+ #include <gmock/gmock.h>
++#include <limits>
+ #include <memory>
+ 
+ #include "async/asyncable.h"
+@@ -34,6 +35,7 @@
+ #include "engraving/dom/chord.h"
+ 
+ #include "engraving/playback/playbackmodel.h"
++#include "engraving/playback/playbacknoteindex.h"
+ 
+ #include "utils/scorerw.h"
+ 
+@@ -50,6 +52,26 @@ static constexpr duration_t QUARTER_NOTE_DURATION = 500000; // duration in micro
+ static constexpr duration_t HALF_NOTE_DURATION = QUARTER_NOTE_DURATION * 2; // duration in microseconds for 1/2 120BPM
+ static constexpr duration_t WHOLE_NOTE_DURATION = QUARTER_NOTE_DURATION * 4; // duration in microseconds for 4/4 120BPM
+ 
++static mpe::NoteEvent makeNoteEventWithPitchLevel(timestamp_t actualTimestamp, duration_t actualDuration, pitch_level_t pitchLevel)
++{
++    ArrangementContext arrangement;
++    arrangement.actualTimestamp = actualTimestamp;
++    arrangement.actualDuration = actualDuration;
++
++    PitchContext pitch;
++    pitch.nominalPitchLevel = pitchLevel;
++
++    return mpe::NoteEvent(std::move(arrangement), std::move(pitch), ExpressionContext {});
++}
++
++static mpe::NoteEvent makeNoteEvent(timestamp_t actualTimestamp, duration_t actualDuration, int midiPitch)
++{
++    return makeNoteEventWithPitchLevel(actualTimestamp, actualDuration,
++                                       (midiPitch - ZERO_PITCH_LEVEL_MIDI_EQUIVALENT) * PITCH_LEVEL_STEP);
++}
++
++
++
+ class Engraving_PlaybackModelTests : public ::testing::Test, public muse::async::Asyncable
+ {
+ protected:
+@@ -86,6 +108,159 @@ protected:
+     std::shared_ptr<NiceMock<ArticulationProfilesRepositoryMock> > m_repositoryMock = nullptr;
+ };
+ 
++TEST(Engraving_PlaybackNoteIndexTests, UsesActualTimingAndSemiOpenIntervals)
++{
++    PlaybackEventsMap events;
++    events[999999].push_back(makeNoteEvent(100, 6000000, 64));
++    events[0].push_back(makeNoteEvent(-100, 200, 63));
++
++    PlaybackNoteIndex index;
++    index.add(events);
++    index.finalize();
++
++    EXPECT_TRUE(index.activePitches(-101).empty());
++    EXPECT_EQ(index.activePitches(-100), std::vector<muse::midi::note_idx_t>({ 63 }));
++    EXPECT_EQ(index.activePitches(99), std::vector<muse::midi::note_idx_t>({ 63 }));
++    EXPECT_EQ(index.activePitches(100), std::vector<muse::midi::note_idx_t>({ 64 }));
++    EXPECT_EQ(index.activePitches(3000000), std::vector<muse::midi::note_idx_t>({ 64 }));
++    EXPECT_TRUE(index.activePitches(6000100).empty());
++}
++
++TEST(Engraving_PlaybackNoteIndexTests, UsesNearestSoundingPianoKeyBeforeValidatingMidiRange)
++{
++    PlaybackEventsMap events;
++    events[0].push_back(makeNoteEventWithPitchLevel(0, 100, (48 * PITCH_LEVEL_STEP) + 24)); // MIDI 60.48 -> 60
++    events[0].push_back(makeNoteEventWithPitchLevel(0, 100, (48 * PITCH_LEVEL_STEP) + 25)); // MIDI 60.5 -> 61
++    events[0].push_back(makeNoteEventWithPitchLevel(0, 100, (48 * PITCH_LEVEL_STEP) + 30)); // MIDI 60.6 -> 61
++    events[0].push_back(makeNoteEventWithPitchLevel(0, 100, (115 * PITCH_LEVEL_STEP) + 30)); // MIDI 127.6 -> invalid
++    events[0].push_back(makeNoteEventWithPitchLevel(0, 100, (-12 * PITCH_LEVEL_STEP) - 30)); // MIDI -0.6 -> invalid
++
++    PlaybackNoteIndex index;
++    index.add(events);
++    index.finalize();
++
++    EXPECT_EQ(index.activePitches(0), std::vector<muse::midi::note_idx_t>({ 60, 61 }));
++}
++
++TEST(Engraving_PlaybackNoteIndexTests, MergesDuplicateAndAdjacentIntervals)
++{
++    PlaybackEventsMap firstTrack;
++    firstTrack[0].push_back(makeNoteEvent(0, 100, 72));
++    firstTrack[0].push_back(makeNoteEvent(20, 20, 72));
++    firstTrack[0].push_back(makeNoteEvent(0, 300, 60));
++
++    PlaybackEventsMap secondTrack;
++    secondTrack[100].push_back(makeNoteEvent(100, 100, 72));
++    secondTrack[200].push_back(makeNoteEvent(200, 100, 72));
++    secondTrack[0].push_back(makeNoteEvent(0, 300, 60));
++
++    PlaybackNoteIndex index;
++    index.add(firstTrack);
++    index.add(secondTrack);
++    index.finalize();
++
++    EXPECT_EQ(index.activePitches(150), std::vector<muse::midi::note_idx_t>({ 60, 72 }));
++    EXPECT_TRUE(index.activePitches(300).empty());
++}
++
++TEST(Engraving_PlaybackNoteIndexTests, HandlesInfiniteAndOverflowingDurations)
++{
++    constexpr timestamp_t MAX_TIMESTAMP = std::numeric_limits<timestamp_t>::max();
++
++    PlaybackEventsMap events;
++    events[0].push_back(makeNoteEvent(10, INFINITE_DURATION, 40));
++    events[0].push_back(makeNoteEvent(MAX_TIMESTAMP - 5, 10, 41));
++    events[0].push_back(makeNoteEvent(MAX_TIMESTAMP - 5, 5, 42));
++
++    PlaybackNoteIndex index;
++    index.add(events);
++    index.finalize();
++
++    EXPECT_EQ(index.activePitches(MAX_TIMESTAMP - 1), std::vector<muse::midi::note_idx_t>({ 40, 41, 42 }));
++    EXPECT_EQ(index.activePitches(MAX_TIMESTAMP), std::vector<muse::midi::note_idx_t>({ 40 }));
++}
++
++TEST(Engraving_PlaybackNoteIndexTests, SkipsInvalidEvents)
++{
++    PlaybackEventsMap events;
++    events[0].push_back(std::monostate {});
++    events[0].push_back(makeNoteEvent(0, 100, -1));
++    events[0].push_back(makeNoteEvent(0, 100, 128));
++    events[0].push_back(makeNoteEvent(0, 0, 60));
++    events[0].push_back(makeNoteEvent(0, -1, 61));
++    events[0].push_back(makeNoteEvent(0, 100, 62));
++
++    PlaybackNoteIndex index;
++    index.add(events);
++    index.finalize();
++
++    EXPECT_EQ(index.activePitches(0), std::vector<muse::midi::note_idx_t>({ 62 }));
++}
++
++TEST_F(Engraving_PlaybackModelTests, ActivePlaybackPitchesFiltersTracksAndSurvivesReload)
++{
++    Score* score = ScoreRW::readScore(PLAYBACK_MODEL_TEST_FILES_DIR + "repeat_range/repeat_range.mscx");
++
++    ASSERT_TRUE(score);
++    ASSERT_EQ(score->parts().size(), 1);
++
++    const Part* part = score->parts().front();
++    ASSERT_TRUE(part);
++
++    m_defaultProfile->setPattern(ArticulationType::Standard, buildTestArticulationPattern());
++    EXPECT_CALL(*m_repositoryMock, defaultProfile(_)).WillRepeatedly(Return(m_defaultProfile));
++
++    PlaybackModel model(modularity::globalCtx());
++    model.profilesRepository.set(m_repositoryMock);
++    model.load(score);
++
++    const InstrumentTrackIdSet includedTracks = part->instrumentTrackIdSet();
++    EXPECT_EQ(model.activePlaybackPitches(0, includedTracks), std::vector<muse::midi::note_idx_t>({ 65 }));
++    EXPECT_TRUE(model.activePlaybackPitches(0, {}).empty());
++    EXPECT_TRUE(model.activePlaybackPitches(0, { model.metronomeTrackId() }).empty());
++    EXPECT_EQ(model.activePlaybackPitches(0, includedTracks), std::vector<muse::midi::note_idx_t>({ 65 }));
++
++    model.reload();
++
++    EXPECT_EQ(model.activePlaybackPitches(0, includedTracks), std::vector<muse::midi::note_idx_t>({ 65 }));
++}
++
++TEST_F(Engraving_PlaybackModelTests, ScoreChangeInvalidatesActivePlaybackPitches)
++{
++    Score* score = ScoreRW::readScore(PLAYBACK_MODEL_TEST_FILES_DIR + "repeat_range/repeat_range.mscx");
++
++    ASSERT_TRUE(score);
++    m_defaultProfile->setPattern(ArticulationType::Standard, buildTestArticulationPattern());
++    EXPECT_CALL(*m_repositoryMock, defaultProfile(_)).WillRepeatedly(Return(m_defaultProfile));
++
++    PlaybackModel model(modularity::globalCtx());
++    model.profilesRepository.set(m_repositoryMock);
++    model.load(score);
++
++    const InstrumentTrackIdSet includedTracks = score->parts().front()->instrumentTrackIdSet();
++    EXPECT_EQ(model.activePlaybackPitches(0, includedTracks), std::vector<muse::midi::note_idx_t>({ 65 }));
++
++    Segment* firstSegment = score->firstMeasure()->first(SegmentType::ChordRest);
++    ASSERT_TRUE(firstSegment);
++
++    Chord* firstChord = toChord(firstSegment->element(0));
++    ASSERT_TRUE(firstChord);
++    score->deleteItem(firstChord);
++
++    ScoreChanges changes;
++    changes.tickFrom = 0;
++    changes.tickTo = 480;
++    changes.staffIdxFrom = 0;
++    changes.staffIdxTo = 0;
++    changes.changedTypes = { ElementType::NOTE };
++    score->changesChannel().send(changes);
++
++    EXPECT_TRUE(model.activePlaybackPitches(0, includedTracks).empty());
++}
++
++
++
++
+ /**
+  * @brief PlaybackModelTests_SimpleRepeat
+  * @details In this case we're building up a playback model of a simple score - Violin, 4/4, 120bpm, Treble Cleff, 4 measures
+@@ -238,6 +413,12 @@ TEST_F(Engraving_PlaybackModelTests, Repeat_And_Tremolo)
+     }
+ 
+     EXPECT_EQ(timestampCount, expectedSizePerTimestamp.size());
++
++    const InstrumentTrackIdSet includedTracks = part->instrumentTrackIdSet();
++    const timestamp_t postRepeatTremoloStart = 8 * 2 * QUARTER_NOTE_DURATION;
++    EXPECT_EQ(model.activePlaybackPitches(postRepeatTremoloStart, includedTracks), std::vector<muse::midi::note_idx_t>({ 72 }));
++    EXPECT_EQ(model.activePlaybackPitches(postRepeatTremoloStart + QUARTER_NOTE_DURATION / 32, includedTracks), std::vector<muse::midi::note_idx_t>({ 72 }));
++    EXPECT_TRUE(model.activePlaybackPitches(postRepeatTremoloStart + 2 * QUARTER_NOTE_DURATION, includedTracks).empty());
+ }
+ 
+ /**
+@@ -270,11 +451,13 @@ TEST_F(Engraving_PlaybackModelTests, Repeat_Tempo_Changes_And_Tie)
+ 
+     // [THEN] The duration of the tied note matches expectations
+     size_t noteEventCount = 0;
++    const mpe::NoteEvent* tiedNoteEvent = nullptr;
+     for (const auto& pair : result) {
+         for (const PlaybackEvent& event : pair.second) {
+             if (std::holds_alternative<mpe::NoteEvent>(event)) {
+                 const mpe::NoteEvent& noteEvent = std::get<mpe::NoteEvent>(event);
+                 EXPECT_EQ(noteEvent.arrangementCtx().nominalDuration, 8 * QUARTER_NOTE_DURATION);
++                tiedNoteEvent = &noteEvent;
+ 
+                 ++noteEventCount;
+             }
+@@ -283,6 +466,14 @@ TEST_F(Engraving_PlaybackModelTests, Repeat_Tempo_Changes_And_Tie)
+ 
+     // [THEN] The amount of note events matches expectations
+     EXPECT_EQ(noteEventCount, 1);
++    ASSERT_TRUE(tiedNoteEvent);
++    const ArrangementContext& arrangement = tiedNoteEvent->arrangementCtx();
++    const InstrumentTrackIdSet includedTracks = part->instrumentTrackIdSet();
++    EXPECT_TRUE(model.activePlaybackPitches(arrangement.actualTimestamp - 1, includedTracks).empty());
++    EXPECT_EQ(model.activePlaybackPitches(arrangement.actualTimestamp, includedTracks), std::vector<muse::midi::note_idx_t>({ 67 }));
++    EXPECT_EQ(model.activePlaybackPitches(arrangement.actualTimestamp + arrangement.actualDuration / 2, includedTracks), std::vector<muse::midi::note_idx_t>({ 67 }));
++    EXPECT_EQ(model.activePlaybackPitches(arrangement.actualTimestamp + arrangement.actualDuration - 1, includedTracks), std::vector<muse::midi::note_idx_t>({ 67 }));
++    EXPECT_TRUE(model.activePlaybackPitches(arrangement.actualTimestamp + arrangement.actualDuration, includedTracks).empty());
+ }
+ 
+ /**
+diff --git a/src/notation/inotationplayback.h b/src/notation/inotationplayback.h
+index e11ec263..e78d38eb 100644
+--- a/src/notation/inotationplayback.h
++++ b/src/notation/inotationplayback.h
+@@ -50,6 +50,8 @@ public:
+     virtual bool isChordSymbolsTrack(const engraving::InstrumentTrackId& trackId) const = 0;
+ 
+     virtual const muse::mpe::PlaybackData& trackPlaybackData(const engraving::InstrumentTrackId& trackId) const = 0;
++    virtual std::vector<muse::midi::note_idx_t> activePlaybackPitches(
++        muse::audio::secs_t position, const engraving::InstrumentTrackIdSet& includedTracks) const = 0;
+ 
+     virtual void triggerEventsForItems(const std::vector<const EngravingItem*>& items, muse::mpe::duration_t duration, bool flushSound) = 0;
+     virtual void triggerMetronome(muse::midi::tick_t tick) = 0;
+diff --git a/src/notation/internal/notationplayback.cpp b/src/notation/internal/notationplayback.cpp
+index 8d10aea3..857ca57e 100644
+--- a/src/notation/internal/notationplayback.cpp
++++ b/src/notation/internal/notationplayback.cpp
+@@ -161,6 +161,12 @@ const muse::mpe::PlaybackData& NotationPlayback::trackPlaybackData(const engravi
+     return m_playbackModel.resolveTrackPlaybackData(trackId);
+ }
+ 
++std::vector<muse::midi::note_idx_t> NotationPlayback::activePlaybackPitches(
++    muse::audio::secs_t position, const engraving::InstrumentTrackIdSet& includedTracks) const
++{
++    return m_playbackModel.activePlaybackPitches(muse::audio::secsToMicrosecs(position), includedTracks);
++}
++
+ void NotationPlayback::triggerEventsForItems(const std::vector<const EngravingItem*>& items, muse::mpe::duration_t duration,
+                                              bool flushSound)
+ {
+@@ -200,8 +206,7 @@ void NotationPlayback::triggerControllers(const muse::mpe::ControllerChangeEvent
+         { 0, mpe::PlaybackEventList(list.begin(), list.end()) }
+     };
+ 
+-    mpe::PlaybackData& data = m_playbackModel.resolveTrackPlaybackData(trackId);
+-    data.offStream.send(events, {}, false /*flushOffstream*/);
++    m_playbackModel.sendOffStreamEvents(trackId, events, {}, false /*flushOffstream*/);
+ }
+ 
+ InstrumentTrackIdSet NotationPlayback::existingTrackIdSet() const
+diff --git a/src/notation/internal/notationplayback.h b/src/notation/internal/notationplayback.h
+index c6e06f29..ae3c0138 100644
+--- a/src/notation/internal/notationplayback.h
++++ b/src/notation/internal/notationplayback.h
+@@ -55,6 +55,8 @@ public:
+     bool isChordSymbolsTrack(const engraving::InstrumentTrackId& trackId) const override;
+ 
+     const muse::mpe::PlaybackData& trackPlaybackData(const engraving::InstrumentTrackId& trackId) const override;
++    std::vector<muse::midi::note_idx_t> activePlaybackPitches(
++        muse::audio::secs_t position, const engraving::InstrumentTrackIdSet& includedTracks) const override;
+ 
+     void triggerEventsForItems(const std::vector<const EngravingItem*>& items, muse::mpe::duration_t duration, bool flushSound) override;
+     void triggerMetronome(muse::midi::tick_t tick) override;
+diff --git a/src/notation/internal/notationplaybackstub.cpp b/src/notation/internal/notationplaybackstub.cpp
+index 7ae42a32..6b5d208b 100644
+--- a/src/notation/internal/notationplaybackstub.cpp
++++ b/src/notation/internal/notationplaybackstub.cpp
+@@ -75,6 +75,12 @@ const muse::mpe::PlaybackData& NotationPlaybackStub::trackPlaybackData(const eng
+     return dummy;
+ }
+ 
++std::vector<muse::midi::note_idx_t> NotationPlaybackStub::activePlaybackPitches(
++    muse::audio::secs_t, const engraving::InstrumentTrackIdSet&) const
++{
++    return {};
++}
++
+ void NotationPlaybackStub::triggerEventsForItems(const std::vector<const EngravingItem*>&, muse::mpe::duration_t, bool)
+ {
+ }
+diff --git a/src/notation/internal/notationplaybackstub.h b/src/notation/internal/notationplaybackstub.h
+index 60790427..1d6f8f6b 100644
+--- a/src/notation/internal/notationplaybackstub.h
++++ b/src/notation/internal/notationplaybackstub.h
+@@ -42,6 +42,8 @@ public:
+     bool isChordSymbolsTrack(const engraving::InstrumentTrackId& trackId) const override;
+ 
+     const muse::mpe::PlaybackData& trackPlaybackData(const engraving::InstrumentTrackId& trackId) const override;
++    std::vector<muse::midi::note_idx_t> activePlaybackPitches(
++        muse::audio::secs_t position, const engraving::InstrumentTrackIdSet& includedTracks) const override;
+ 
+     void triggerEventsForItems(const std::vector<const EngravingItem*>& items, muse::mpe::duration_t duration, bool flushSound) override;
+     void triggerMetronome(muse::midi::tick_t tick) override;
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.cpp b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.cpp
+index 48a44e0a..afcbf4be 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.cpp
++++ b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.cpp
+@@ -21,25 +21,83 @@
+  */
+ #include "pianokeyboardcontroller.h"
+ 
+-#include "defer.h"
+ #include "log.h"
+ 
++#include "notation/imasternotation.h"
++#include "notation/inotationsolomutestate.h"
++
+ using namespace mu::notation;
+ using namespace muse::midi;
+ 
+ PianoKeyboardController::PianoKeyboardController(const muse::modularity::ContextPtr& iocCtx)
+     : muse::Contextable(iocCtx)
+ {
++}
++
++void PianoKeyboardController::init()
++{
++    if (m_isInitialized) {
++        return;
++    }
++    m_isInitialized = true;
+     onNotationChanged();
+ 
+-    context()->currentNotationChanged().onNotify(this, [this]() {
++    auto globalContext = context();
++    if (!globalContext) {
++        return;
++    }
++    globalContext->currentNotationChanged().onNotify(this, [this]() {
+         onNotationChanged();
+     });
++
++    globalContext->currentMasterNotationChanged().onNotify(this, [this]() { onMasterNotationChanged(); });
++    auto playbackState = globalContext->playbackState();
++    if (!playbackState) {
++        return;
++    }
++    playbackState->playbackStatusChanged().onReceive(this, [this](muse::audio::PlaybackStatus status) {
++        onPlaybackStatusChanged(status);
++    });
++    playbackState->playbackPositionChanged().onReceive(this, [this](muse::audio::secs_t position) {
++        onPlaybackPositionChanged(position);
++    });
++    auto controller = playbackController();
++    if (controller) {
++        controller->playbackInitedChanged().onReceive(this, [this](bool) { refreshPlaybackKeys(); });
++        controller->trackAdded().onReceive(this, [this](muse::audio::TrackId) { refreshPlaybackKeys(); });
++        controller->trackRemoved().onReceive(this, [this](muse::audio::TrackId) { refreshPlaybackKeys(); });
++    }
++    auto configuration = notationConfiguration();
++    if (configuration) {
++        configuration->isPlayChordSymbolsChanged().onNotify(this, [this]() { refreshPlaybackKeys(); });
++    }
++    onPlaybackStatusChanged(playbackState->playbackStatus());
++}
++
++void PianoKeyboardController::setPlaybackTrackingEnabled(bool enabled)
++{
++    if (m_isPlaybackTrackingEnabled == enabled) {
++        return;
++    }
++    m_isPlaybackTrackingEnabled = enabled;
++    if (!enabled) {
++        replacePlaybackKeys({});
++        m_lastPlaybackPosition.reset();
++        return;
++    }
++    if (!m_isInitialized || m_playbackStatus != muse::audio::PlaybackStatus::Running || m_isWaitingForCountIn) {
++        return;
++    }
++    auto globalContext = context();
++    auto playbackState = globalContext ? globalContext->playbackState() : nullptr;
++    if (playbackState) {
++        updatePlaybackKeys(playbackState->playbackPosition(), true);
++    }
+ }
+ 
+ KeyState PianoKeyboardController::keyState(piano_key_t key) const
+ {
+-    if (m_pressedKey == key) {
++    if (m_pressedKey == key || m_playbackKeys.find(key) != m_playbackKeys.cend()) {
+         return KeyState::Played;
+     }
+ 
+@@ -107,6 +165,12 @@ void PianoKeyboardController::setHoveredKey(std::optional<piano_key_t> key)
+ 
+ void PianoKeyboardController::onNotationChanged()
+ {
++    m_notation = currentNotation();
++    if (m_notation) {
++        m_notation->soloMuteState()->trackSoloMuteStateChanged().onReceive(this, [this](const engraving::InstrumentTrackId&, const INotationSoloMuteState::SoloMuteState&) {
++            refreshPlaybackKeys();
++        });
++    }
+     if (auto notation = currentNotation()) {
+         notation->interaction()->selectionChanged().onNotify(this, [this]() {
+             auto notation = currentNotation();
+@@ -116,6 +180,8 @@ void PianoKeyboardController::onNotationChanged()
+ 
+             auto selection = notation->interaction()->selection();
+             if (selection->isNone()) {
++                updateNotesKeys({}, false);
++                refreshPlaybackKeys();
+                 return;
+             }
+ 
+@@ -124,32 +190,21 @@ void PianoKeyboardController::onNotationChanged()
+                 notes.push_back(note);
+             }
+ 
+-            m_isFromMidi = false;
+-            updateNotesKeys(notes);
++            updateNotesKeys(notes, false);
++            refreshPlaybackKeys();
+         }, Asyncable::Mode::SetReplace /* FIXME */);
+ 
+         notation->midiInput()->notesReceived().onReceive(this, [this](const std::vector<const Note*>& notes) {
+-            m_isFromMidi = true;
+-            updateNotesKeys(notes);
++            updateNotesKeys(notes, true);
+         }, Asyncable::Mode::SetReplace /* FIXME */);
+     }
+ }
+ 
+-void PianoKeyboardController::updateNotesKeys(const std::vector<const Note*>& receivedNotes)
++void PianoKeyboardController::updateNotesKeys(const std::vector<const Note*>& receivedNotes, bool isFromMidi)
+ {
+     std::unordered_set<piano_key_t> newKeys;
+     std::unordered_set<piano_key_t> newOtherNotesInChord;
+ 
+-    DEFER {
+-        if (newKeys != m_keys
+-            || newOtherNotesInChord != m_otherNotesInChord) {
+-            m_keys = newKeys;
+-            m_otherNotesInChord = newOtherNotesInChord;
+-        }
+-
+-        m_keyStatesChanged.notify();
+-    };
+-
+     const bool useWrittenPitch = notationConfiguration()->midiUseWrittenPitch().val;
+ 
+     for (const mu::engraving::Note* note : receivedNotes) {
+@@ -158,6 +213,88 @@ void PianoKeyboardController::updateNotesKeys(const std::vector<const Note*>& re
+             newOtherNotesInChord.insert(static_cast<piano_key_t>(useWrittenPitch ? otherNote->epitch() : otherNote->ppitch()));
+         }
+     }
++
++    if (newKeys == m_keys && newOtherNotesInChord == m_otherNotesInChord && isFromMidi == m_isFromMidi) {
++        return;
++    }
++    m_keys = std::move(newKeys);
++    m_otherNotesInChord = std::move(newOtherNotesInChord);
++    m_isFromMidi = isFromMidi;
++    m_keyStatesChanged.notify();
++}
++
++void PianoKeyboardController::onMasterNotationChanged()
++{
++    m_lastPlaybackPosition.reset();
++    m_audibleInstrumentTrackIds.reset();
++    refreshPlaybackKeys();
++}
++
++void PianoKeyboardController::onPlaybackStatusChanged(muse::audio::PlaybackStatus status)
++{
++    if (m_playbackStatus == status) return;
++    m_playbackStatus = status;
++    m_lastPlaybackPosition.reset();
++    m_audibleInstrumentTrackIds.reset();
++    if (status != muse::audio::PlaybackStatus::Running) {
++        m_isWaitingForCountIn = false;
++        m_countInStartPosition.reset();
++        if (replacePlaybackKeys({}) && m_isPlaybackTrackingEnabled) m_keyStatesChanged.notify();
++        return;
++    }
++    auto configuration = notationConfiguration();
++    m_isWaitingForCountIn = configuration && configuration->isCountInEnabled();
++    auto globalContext = context();
++    auto playbackState = globalContext ? globalContext->playbackState() : nullptr;
++    if (m_isWaitingForCountIn && playbackState) m_countInStartPosition = playbackState->playbackPosition();
++    if (replacePlaybackKeys({}) && m_isPlaybackTrackingEnabled) m_keyStatesChanged.notify();
++    if (!m_isWaitingForCountIn && m_isPlaybackTrackingEnabled && playbackState) updatePlaybackKeys(playbackState->playbackPosition(), true);
++}
++
++void PianoKeyboardController::onPlaybackPositionChanged(muse::audio::secs_t position)
++{
++    if (m_playbackStatus != muse::audio::PlaybackStatus::Running) return;
++    if (m_isWaitingForCountIn) {
++        if (m_countInStartPosition == position) return;
++        m_isWaitingForCountIn = false;
++        m_countInStartPosition.reset();
++        m_lastPlaybackPosition.reset();
++    }
++    updatePlaybackKeys(position);
++}
++
++void PianoKeyboardController::refreshPlaybackKeys()
++{
++    m_audibleInstrumentTrackIds.reset();
++    if (!m_isPlaybackTrackingEnabled || m_playbackStatus != muse::audio::PlaybackStatus::Running || m_isWaitingForCountIn) return;
++    auto globalContext = context();
++    auto playbackState = globalContext ? globalContext->playbackState() : nullptr;
++    if (playbackState) updatePlaybackKeys(playbackState->playbackPosition(), true);
++}
++
++void PianoKeyboardController::updatePlaybackKeys(muse::audio::secs_t position, bool force)
++{
++    if (!m_isPlaybackTrackingEnabled || m_playbackStatus != muse::audio::PlaybackStatus::Running || m_isWaitingForCountIn
++        || (!force && m_lastPlaybackPosition == position)) return;
++    m_lastPlaybackPosition = position;
++    auto globalContext = context();
++    auto masterNotation = globalContext ? globalContext->currentMasterNotation() : nullptr;
++    auto notationPlayback = masterNotation ? masterNotation->playback() : nullptr;
++    auto controller = playbackController();
++    std::unordered_set<piano_key_t> playbackKeys;
++    if (notationPlayback && controller) {
++        if (!m_audibleInstrumentTrackIds) m_audibleInstrumentTrackIds = controller->audibleInstrumentTrackIds();
++        const auto pitches = notationPlayback->activePlaybackPitches(position, *m_audibleInstrumentTrackIds);
++        playbackKeys.insert(pitches.cbegin(), pitches.cend());
++    }
++    if (replacePlaybackKeys(std::move(playbackKeys))) m_keyStatesChanged.notify();
++}
++
++bool PianoKeyboardController::replacePlaybackKeys(std::unordered_set<piano_key_t> keys)
++{
++    if (m_playbackKeys == keys) return false;
++    m_playbackKeys = std::move(keys);
++    return true;
+ }
+ 
+ void PianoKeyboardController::sendNoteOn(piano_key_t key)
+@@ -193,5 +330,6 @@ void PianoKeyboardController::sendNoteOff(piano_key_t key)
+ 
+ INotationPtr PianoKeyboardController::currentNotation() const
+ {
+-    return context()->currentNotation();
++    auto globalContext = context();
++    return globalContext ? globalContext->currentNotation() : nullptr;
+ }
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.h b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.h
+index 87e593c2..f5528c31 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.h
++++ b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.h
+@@ -23,22 +23,31 @@
+ #pragma once
+ 
+ #include "async/asyncable.h"
++#include "audio/common/audiotypes.h"
+ 
+ #include "modularity/ioc.h"
+ #include "context/iglobalcontext.h"
+ #include "notation/inotationconfiguration.h"
++#include "playback/iplaybackcontroller.h"
+ 
+ #include "pianokeyboardtypes.h"
+ 
+ namespace mu::notation {
+ class PianoKeyboardController : public muse::Contextable, public muse::async::Asyncable
+ {
++public:
+     muse::GlobalInject<INotationConfiguration> notationConfiguration;
++
++private:
+     muse::ContextInject<context::IGlobalContext> context = { this };
++    muse::ContextInject<playback::IPlaybackController> playbackController = { this };
+ 
+ public:
+     PianoKeyboardController(const muse::modularity::ContextPtr& iocCtx);
+ 
++    void init();
++    void setPlaybackTrackingEnabled(bool enabled);
++
+     std::optional<piano_key_t> pressedKey() const;
+     void setPressedKey(std::optional<piano_key_t> key);
+     void setHoveredKey(std::optional<piano_key_t> key);
+@@ -52,17 +61,35 @@ private:
+     INotationPtr currentNotation() const;
+ 
+     void onNotationChanged();
+-    void updateNotesKeys(const std::vector<const Note*>& receivedNotes);
++    void onMasterNotationChanged();
++    void updateNotesKeys(const std::vector<const Note*>& receivedNotes, bool isFromMidi);
++
++    void onPlaybackStatusChanged(muse::audio::PlaybackStatus status);
++    void onPlaybackPositionChanged(muse::audio::secs_t position);
++    void refreshPlaybackKeys();
++    void updatePlaybackKeys(muse::audio::secs_t position, bool force = false);
++    bool replacePlaybackKeys(std::unordered_set<piano_key_t> keys);
+ 
+     void sendNoteOn(piano_key_t key);
+     void sendNoteOff(piano_key_t key);
+ 
++    INotationPtr m_notation;
++
+     std::optional<piano_key_t> m_pressedKey = std::nullopt;
+     std::optional<piano_key_t> m_hoveredKey = std::nullopt;
+     std::unordered_set<piano_key_t> m_keys;
+     std::unordered_set<piano_key_t> m_otherNotesInChord;
++    std::unordered_set<piano_key_t> m_playbackKeys;
+ 
+     bool m_isFromMidi = false;
++    bool m_isInitialized = false;
++    bool m_isPlaybackTrackingEnabled = false;
++    bool m_isWaitingForCountIn = false;
++
++    muse::audio::PlaybackStatus m_playbackStatus = muse::audio::PlaybackStatus::Stopped;
++    std::optional<muse::audio::secs_t> m_lastPlaybackPosition;
++    std::optional<muse::audio::secs_t> m_countInStartPosition;
++    std::optional<engraving::InstrumentTrackIdSet> m_audibleInstrumentTrackIds;
+ 
+     muse::async::Notification m_keyStatesChanged;
+ };
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp
+index a3799f83..c3bfa8de 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp
++++ b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp
+@@ -62,10 +62,14 @@ PianoKeyboardView::PianoKeyboardView(QQuickItem* parent)
+ PianoKeyboardView::~PianoKeyboardView()
+ {
+     delete m_controller;
++    m_controller = nullptr;
+ }
+ 
+ void PianoKeyboardView::init()
+ {
++    if (m_isInitialized) {
++        return;
++    }
+     m_isInitialized = true;
+ 
+     calculateKeyRects();
+@@ -74,6 +78,11 @@ void PianoKeyboardView::init()
+     connect(this, &QQuickItem::heightChanged, this, &PianoKeyboardView::calculateKeyRects);
+ 
+     m_controller = new PianoKeyboardController(iocContext());
++    m_controller->init();
++    connect(this, &QQuickItem::visibleChanged, this, [this]() {
++        if (m_controller) m_controller->setPlaybackTrackingEnabled(isVisible());
++    });
++    m_controller->setPlaybackTrackingEnabled(isVisible());
+ 
+     uiConfiguration()->fontChanged().onNotify(this, [this]() {
+         determineOctaveLabelsFont();
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/tests/CMakeLists.txt b/src/notationscene/qml/MuseScore/NotationScene/tests/CMakeLists.txt
+index f5a821b8..a5aa3072 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/tests/CMakeLists.txt
++++ b/src/notationscene/qml/MuseScore/NotationScene/tests/CMakeLists.txt
+@@ -28,6 +28,7 @@ set(MODULE_TEST_SRC
+ 
+     ${CMAKE_CURRENT_LIST_DIR}/environment.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/notationviewinputcontroller_tests.cpp
++    ${CMAKE_CURRENT_LIST_DIR}/pianokeyboardcontroller_tests.cpp
+ )
+ 
+ set(MODULE_TEST_LINK
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/tests/pianokeyboardcontroller_tests.cpp b/src/notationscene/qml/MuseScore/NotationScene/tests/pianokeyboardcontroller_tests.cpp
+new file mode 100644
+index 00000000..13b9bfe3
+--- /dev/null
++++ b/src/notationscene/qml/MuseScore/NotationScene/tests/pianokeyboardcontroller_tests.cpp
+@@ -0,0 +1,841 @@
++/*
++ * SPDX-License-Identifier: GPL-3.0-only
++ * MuseScore-Studio-CLA-applies
++ *
++ * MuseScore Studio
++ * Music Composition & Notation
++ *
++ * Copyright (C) 2026 MuseScore Limited and others
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 3 as
++ * published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++#include <gmock/gmock.h>
++
++#include "context/iglobalcontext.h"
++#include "engraving/compat/scoreaccess.h"
++#include "engraving/dom/chord.h"
++#include "engraving/dom/factory.h"
++#include "engraving/dom/masterscore.h"
++#include "engraving/dom/note.h"
++#include "notation/imasternotation.h"
++#include "notation/inotation.h"
++#include "notation/inotationmidiinput.h"
++#include "notation/inotationplayback.h"
++#include "notation/inotationsolomutestate.h"
++#include "notation/tests/mocks/notationconfigurationmock.h"
++#include "notation/tests/mocks/notationinteractionmock.h"
++#include "notation/tests/mocks/notationselectionmock.h"
++#include "playback/tests/mocks/playbackcontrollermock.h"
++
++#include "notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.h"
++
++using ::testing::_;
++using ::testing::NiceMock;
++using ::testing::Return;
++
++using namespace muse;
++using namespace mu;
++using namespace mu::notation;
++
++namespace {
++class PlaybackStateFake : public context::IPlaybackState
++{
++public:
++    bool isPlaying() const override
++    {
++        return m_status == audio::PlaybackStatus::Running;
++    }
++
++    audio::PlaybackStatus playbackStatus() const override
++    {
++        return m_status;
++    }
++
++    async::Channel<audio::PlaybackStatus> playbackStatusChanged() const override
++    {
++        return m_statusChanged;
++    }
++
++    audio::secs_t playbackPosition() const override
++    {
++        return m_position;
++    }
++
++    async::Channel<audio::secs_t> playbackPositionChanged() const override
++    {
++        return m_positionChanged;
++    }
++
++    void setStatus(audio::PlaybackStatus status)
++    {
++        m_status = status;
++        m_statusChanged.send(status);
++    }
++
++    void setPosition(audio::secs_t position)
++    {
++        m_position = position;
++        m_positionChanged.send(position);
++    }
++
++private:
++    audio::PlaybackStatus m_status = audio::PlaybackStatus::Stopped;
++    audio::secs_t m_position = 0.0;
++    mutable async::Channel<audio::PlaybackStatus> m_statusChanged;
++    mutable async::Channel<audio::secs_t> m_positionChanged;
++};
++
++class NotationMidiInputFake : public INotationMidiInput
++{
++public:
++    void onMidiEventReceived(const midi::Event&) override
++    {
++    }
++
++    async::Channel<std::vector<const engraving::Note*> > notesReceived() const override
++    {
++        return m_notesReceived;
++    }
++
++    void onRealtimeAdvance() override
++    {
++    }
++
++    void sendNotes(const std::vector<const engraving::Note*>& notes)
++    {
++        m_notesReceived.send(notes);
++    }
++
++private:
++    mutable async::Channel<std::vector<const engraving::Note*> > m_notesReceived;
++};
++
++class NotationSoloMuteStateFake : public INotationSoloMuteState
++{
++public:
++    Ret read(const engraving::MscReader&, const io::path_t&) override
++    {
++        return Ret();
++    }
++
++    Ret write(io::IODevice*) override
++    {
++        return Ret();
++    }
++
++    bool trackSoloMuteStateExists(const engraving::InstrumentTrackId&) const override
++    {
++        return false;
++    }
++
++    const SoloMuteState& trackSoloMuteState(const engraving::InstrumentTrackId&) const override
++    {
++        return m_state;
++    }
++
++    void setTrackSoloMuteState(const engraving::InstrumentTrackId& trackId, const SoloMuteState& state) override
++    {
++        m_state = state;
++        m_trackSoloMuteStateChanged.send(trackId, state);
++    }
++
++    void removeTrackSoloMuteState(const engraving::InstrumentTrackId&) override
++    {
++    }
++
++    async::Channel<engraving::InstrumentTrackId, SoloMuteState> trackSoloMuteStateChanged() const override
++    {
++        return m_trackSoloMuteStateChanged;
++    }
++
++private:
++    SoloMuteState m_state;
++    mutable async::Channel<engraving::InstrumentTrackId, SoloMuteState> m_trackSoloMuteStateChanged;
++};
++
++class NotationMock : public INotation
++{
++public:
++    MOCK_METHOD(const modularity::ContextPtr&, iocContext, (), (const, override));
++    MOCK_METHOD(project::INotationProject*, project, (), (const, override));
++    MOCK_METHOD(IMasterNotationPtr, masterNotation, (), (const, override));
++    MOCK_METHOD(QString, name, (), (const, override));
++    MOCK_METHOD(QString, projectName, (), (const, override));
++    MOCK_METHOD(QString, projectNameAndPartName, (), (const, override));
++    MOCK_METHOD(QString, workTitle, (), (const, override));
++    MOCK_METHOD(QString, projectWorkTitle, (), (const, override));
++    MOCK_METHOD(QString, projectWorkTitleAndPartName, (), (const, override));
++    MOCK_METHOD(bool, isOpen, (), (const, override));
++    MOCK_METHOD(void, setIsOpen, (bool), (override));
++    MOCK_METHOD(async::Notification, openChanged, (), (const, override));
++    MOCK_METHOD(bool, hasVisibleParts, (), (const, override));
++    MOCK_METHOD(bool, isMaster, (), (const, override));
++    MOCK_METHOD(ViewMode, viewMode, (), (const, override));
++    MOCK_METHOD(void, setViewMode, (const ViewMode&), (override));
++    MOCK_METHOD(async::Notification, viewModeChanged, (), (const, override));
++    MOCK_METHOD(INotationPaintingPtr, painting, (), (const, override));
++    MOCK_METHOD(INotationViewStatePtr, viewState, (), (const, override));
++    MOCK_METHOD(INotationSoloMuteStatePtr, soloMuteState, (), (const, override));
++    MOCK_METHOD(INotationInteractionPtr, interaction, (), (const, override));
++    MOCK_METHOD(INotationMidiInputPtr, midiInput, (), (const, override));
++    MOCK_METHOD(INotationUndoStackPtr, undoStack, (), (const, override));
++    MOCK_METHOD(INotationStylePtr, style, (), (const, override));
++    MOCK_METHOD(INotationElementsPtr, elements, (), (const, override));
++    MOCK_METHOD(INotationAccessibilityPtr, accessibility, (), (const, override));
++    MOCK_METHOD(INotationPartsPtr, parts, (), (const, override));
++    MOCK_METHOD(async::Channel<RectF>, notationChanged, (), (const, override));
++};
++
++class GlobalContextFake : public context::IGlobalContext
++{
++public:
++    void setCurrentProject(const project::INotationProjectPtr& project) override
++    {
++        m_project = project;
++        m_projectChanged.notify();
++    }
++
++    project::INotationProjectPtr currentProject() const override
++    {
++        return m_project;
++    }
++
++    async::Notification currentProjectChanged() const override
++    {
++        return m_projectChanged;
++    }
++
++    IMasterNotationPtr currentMasterNotation() const override
++    {
++        return m_masterNotation;
++    }
++
++    async::Notification currentMasterNotationChanged() const override
++    {
++        return m_masterNotationChanged;
++    }
++
++    void setCurrentNotation(const INotationPtr& notation) override
++    {
++        m_notation = notation;
++        m_notationChanged.notify();
++    }
++
++    INotationPtr currentNotation() const override
++    {
++        return m_notation;
++    }
++
++    async::Notification currentNotationChanged() const override
++    {
++        return m_notationChanged;
++    }
++
++    void setCurrentPlayer(const audio::IPlayerPtr&) override
++    {
++    }
++
++    context::IPlaybackStatePtr playbackState() const override
++    {
++        return m_playbackState;
++    }
++
++    void setCurrentMasterNotation(const IMasterNotationPtr& notation)
++    {
++        m_masterNotation = notation;
++        m_masterNotationChanged.notify();
++    }
++
++    void setPlaybackState(const context::IPlaybackStatePtr& state)
++    {
++        m_playbackState = state;
++    }
++
++private:
++    project::INotationProjectPtr m_project;
++    IMasterNotationPtr m_masterNotation;
++    INotationPtr m_notation;
++    context::IPlaybackStatePtr m_playbackState;
++    mutable async::Notification m_projectChanged;
++    mutable async::Notification m_masterNotationChanged;
++    mutable async::Notification m_notationChanged;
++};
++
++class NotationPlaybackMock : public INotationPlayback
++{
++public:
++    MOCK_METHOD(void, init, (), (override));
++    MOCK_METHOD(void, reload, (), (override));
++    MOCK_METHOD(void, setSendEventsOnScoreChange, (const engraving::InstrumentTrackId&, bool), (override));
++    MOCK_METHOD(void, sendEventsForChangedTracks, (), (override));
++    MOCK_METHOD(async::Channel<engraving::InstrumentTrackIdSet>, tracksDataChanged, (), (const, override));
++    MOCK_METHOD(const engraving::InstrumentTrackId&, metronomeTrackId, (), (const, override));
++    MOCK_METHOD(engraving::InstrumentTrackId, chordSymbolsTrackId, (const ID&), (const, override));
++    MOCK_METHOD(bool, isChordSymbolsTrack, (const engraving::InstrumentTrackId&), (const, override));
++    MOCK_METHOD(const mpe::PlaybackData&, trackPlaybackData, (const engraving::InstrumentTrackId&), (const, override));
++    MOCK_METHOD(std::vector<midi::note_idx_t>, activePlaybackPitches,
++                (audio::secs_t, const engraving::InstrumentTrackIdSet&), (const, override));
++    MOCK_METHOD(void, triggerEventsForItems,
++                (const std::vector<const engraving::EngravingItem*>&, mpe::duration_t, bool), (override));
++    MOCK_METHOD(void, triggerMetronome, (midi::tick_t), (override));
++    MOCK_METHOD(void, triggerCountIn, (midi::tick_t, secs_t &), (override));
++    MOCK_METHOD(void, triggerControllers, (const mpe::ControllerChangeEventList&, engraving::staff_idx_t, int), (override));
++    MOCK_METHOD(engraving::InstrumentTrackIdSet, existingTrackIdSet, (), (const, override));
++    MOCK_METHOD(async::Channel<engraving::InstrumentTrackId>, trackAdded, (), (const, override));
++    MOCK_METHOD(async::Channel<engraving::InstrumentTrackId>, trackRemoved, (), (const, override));
++    MOCK_METHOD(audio::secs_t, totalPlayTime, (), (const, override));
++    MOCK_METHOD(async::Channel<audio::secs_t>, totalPlayTimeChanged, (), (const, override));
++    MOCK_METHOD(audio::secs_t, playedTickToSec, (midi::tick_t), (const, override));
++    MOCK_METHOD(midi::tick_t, secToPlayedTick, (audio::secs_t), (const, override));
++    MOCK_METHOD(midi::tick_t, secToTick, (audio::secs_t), (const, override));
++    MOCK_METHOD((RetVal<midi::tick_t>), playPositionTickByRawTick, (midi::tick_t), (const, override));
++    MOCK_METHOD((RetVal<midi::tick_t>), playPositionTickByElement, (const engraving::EngravingItem*), (const, override));
++    MOCK_METHOD(void, addLoopBoundary, (LoopBoundaryType, midi::tick_t), (override));
++    MOCK_METHOD(void, setLoopBoundariesEnabled, (bool), (override));
++    MOCK_METHOD(bool, isLoopEnabled, (), (const, override));
++    MOCK_METHOD(async::Channel<bool>, loopEnabledChanged, (), (const, override));
++    MOCK_METHOD(const LoopBoundaries&, loopBoundaries, (), (const, override));
++    MOCK_METHOD(async::Notification, loopBoundariesChanged, (), (const, override));
++    MOCK_METHOD(const Tempo&, multipliedTempo, (midi::tick_t), (const, override));
++    MOCK_METHOD(engraving::MeasureBeat, beat, (midi::tick_t), (const, override));
++    MOCK_METHOD(midi::tick_t, beatToRawTick, (int, int), (const, override));
++    MOCK_METHOD(double, tempoMultiplier, (), (const, override));
++    MOCK_METHOD(void, setTempoMultiplier, (double), (override));
++    MOCK_METHOD(void, addSoundFlags, (const std::vector<engraving::StaffText*>&), (override));
++    MOCK_METHOD(void, removeSoundFlags, (const engraving::InstrumentTrackIdSet&), (override));
++    MOCK_METHOD(bool, hasSoundFlags, (const engraving::InstrumentTrackIdSet&), (override));
++};
++
++class MasterNotationMock : public IMasterNotation
++{
++public:
++    MOCK_METHOD(project::INotationProject*, project, (), (const, override));
++    MOCK_METHOD(Ret, setupNewScore, (engraving::MasterScore*, const ScoreCreateOptions&), (override));
++    MOCK_METHOD(void, applyOptions, (engraving::MasterScore*, const ScoreCreateOptions&, bool), (override));
++    MOCK_METHOD(engraving::MasterScore*, masterScore, (), (const, override));
++    MOCK_METHOD(void, setMasterScore, (engraving::MasterScore*, bool), (override));
++    MOCK_METHOD(INotationPtr, notation, (), (override));
++    MOCK_METHOD(int, mscVersion, (), (const, override));
++    MOCK_METHOD(IExcerptNotationPtr, createEmptyExcerpt, (const QString&), (const, override));
++    MOCK_METHOD(const ExcerptNotationList&, excerpts, (), (const, override));
++    MOCK_METHOD(async::Notification, excerptsChanged, (), (const, override));
++    MOCK_METHOD(const ExcerptNotationList&, potentialExcerpts, (), (const, override));
++    MOCK_METHOD(void, initExcerpts, (const ExcerptNotationList&), (override));
++    MOCK_METHOD(void, setExcerpts, (const ExcerptNotationList&), (override));
++    MOCK_METHOD(void, resetExcerpt, (IExcerptNotationPtr &), (override));
++    MOCK_METHOD(void, sortExcerpts, (ExcerptNotationList &), (override));
++    MOCK_METHOD(void, setExcerptIsOpen, (const INotationPtr, bool), (override));
++    MOCK_METHOD(INotationPartsPtr, parts, (), (const, override));
++    MOCK_METHOD(bool, hasParts, (), (const, override));
++    MOCK_METHOD(async::Notification, hasPartsChanged, (), (const, override));
++    MOCK_METHOD(INotationPlaybackPtr, playback, (), (const, override));
++    MOCK_METHOD(void, initNotationSoloMuteState, (const INotationPtr), (override));
++    MOCK_METHOD(INotationAutomationPtr, automation, (), (const, override));
++};
++
++engraving::InstrumentTrackId makeTrackId(int partId, const char16_t* instrumentId)
++{
++    return engraving::InstrumentTrackId { ID(partId), String(instrumentId) };
++}
++}
++
++class PianoKeyboardControllerTests : public ::testing::Test, public async::Asyncable
++{
++public:
++    void SetUp() override
++    {
++        static modularity::IoCID nextContextId = 100;
++        m_iocContext = std::make_shared<modularity::Context>(nextContextId++);
++
++        m_playbackState = std::make_shared<PlaybackStateFake>();
++        m_globalContext = std::make_shared<GlobalContextFake>();
++        m_globalContext->setPlaybackState(m_playbackState);
++
++        m_notationPlayback = std::make_shared<NiceMock<NotationPlaybackMock> >();
++        m_masterNotation = std::make_shared<NiceMock<MasterNotationMock> >();
++        ON_CALL(*m_masterNotation, playback()).WillByDefault(Return(m_notationPlayback));
++        m_globalContext->setCurrentMasterNotation(m_masterNotation);
++
++        m_soloMuteState = std::make_shared<NotationSoloMuteStateFake>();
++        m_interaction = std::make_shared<NiceMock<NotationInteractionMock> >();
++        m_midiInput = std::make_shared<NotationMidiInputFake>();
++        m_notation = std::make_shared<NiceMock<NotationMock> >();
++        ON_CALL(*m_notation, soloMuteState()).WillByDefault(Return(m_soloMuteState));
++        ON_CALL(*m_notation, interaction()).WillByDefault(Return(m_interaction));
++        ON_CALL(*m_notation, midiInput()).WillByDefault(Return(m_midiInput));
++        ON_CALL(*m_interaction, selectionChanged()).WillByDefault(Return(m_selectionChanged));
++        m_globalContext->setCurrentNotation(m_notation);
++
++        m_playbackController = std::make_shared<NiceMock<playback::PlaybackControllerMock> >();
++        m_audibleTracks = { makeTrackId(1, u"piano") };
++        ON_CALL(*m_playbackController, audibleInstrumentTrackIds()).WillByDefault(Return(m_audibleTracks));
++        ON_CALL(*m_playbackController, playbackInitedChanged()).WillByDefault(Return(m_playbackInitedChanged));
++        ON_CALL(*m_playbackController, trackAdded()).WillByDefault(Return(m_trackAdded));
++        ON_CALL(*m_playbackController, trackRemoved()).WillByDefault(Return(m_trackRemoved));
++
++        modularity::ioc(m_iocContext)->registerExport<context::IGlobalContext>("piano_keyboard_tests", m_globalContext);
++        modularity::ioc(m_iocContext)->registerExport<playback::IPlaybackController>("piano_keyboard_tests", m_playbackController);
++
++        m_configuration = std::make_shared<NiceMock<NotationConfigurationMock> >();
++        ON_CALL(*m_configuration, isCountInEnabled()).WillByDefault(Return(false));
++        ON_CALL(*m_configuration, isPlayChordSymbolsChanged()).WillByDefault(Return(m_playChordSymbolsChanged));
++
++        m_controller = std::make_unique<PianoKeyboardController>(m_iocContext);
++        m_controller->notationConfiguration.set(m_configuration);
++        m_controller->keyStatesChanged().onNotify(this, [this]() {
++            ++m_keyStatesChangedCount;
++        });
++        m_controller->init();
++    }
++
++    void TearDown() override
++    {
++        if (m_controller) {
++            m_controller->keyStatesChanged().disconnect(this);
++        }
++        m_controller.reset();
++        modularity::removeIoC(m_iocContext);
++    }
++
++protected:
++    void enableTracking()
++    {
++        m_controller->setPlaybackTrackingEnabled(true);
++    }
++
++    std::unique_ptr<PianoKeyboardController> m_controller;
++    modularity::ContextPtr m_iocContext;
++    std::shared_ptr<PlaybackStateFake> m_playbackState;
++    std::shared_ptr<GlobalContextFake> m_globalContext;
++    std::shared_ptr<NiceMock<NotationPlaybackMock> > m_notationPlayback;
++    std::shared_ptr<NiceMock<MasterNotationMock> > m_masterNotation;
++    std::shared_ptr<NiceMock<NotationMock> > m_notation;
++    std::shared_ptr<NotationSoloMuteStateFake> m_soloMuteState;
++    std::shared_ptr<NiceMock<NotationInteractionMock> > m_interaction;
++    std::shared_ptr<NotationMidiInputFake> m_midiInput;
++    std::shared_ptr<NiceMock<playback::PlaybackControllerMock> > m_playbackController;
++    std::shared_ptr<NiceMock<NotationConfigurationMock> > m_configuration;
++    async::Notification m_selectionChanged;
++    async::Notification m_playChordSymbolsChanged;
++    async::Channel<bool> m_playbackInitedChanged;
++    async::Channel<audio::TrackId> m_trackAdded;
++    async::Channel<audio::TrackId> m_trackRemoved;
++    engraving::InstrumentTrackIdSet m_audibleTracks;
++    int m_keyStatesChangedCount = 0;
++};
++
++TEST_F(PianoKeyboardControllerTests, RunningQueriesImmediatelyAndUsesAudibleTracks)
++{
++    enableTracking();
++    m_playbackState->setPosition(1.25);
++
++    EXPECT_CALL(*m_playbackController, audibleInstrumentTrackIds())
++    .WillOnce(Return(m_audibleTracks));
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.25), m_audibleTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 60, 64 }));
++
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++
++    EXPECT_EQ(m_controller->keyState(60), KeyState::Played);
++    EXPECT_EQ(m_controller->keyState(64), KeyState::Played);
++    EXPECT_EQ(m_controller->keyState(65), KeyState::None);
++    EXPECT_EQ(m_keyStatesChangedCount, 1);
++}
++
++TEST_F(PianoKeyboardControllerTests, CountInWaitsForFirstDifferentPosition)
++{
++    ON_CALL(*m_configuration, isCountInEnabled()).WillByDefault(Return(true));
++    enableTracking();
++    m_playbackState->setPosition(3.0);
++
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(_, _)).Times(0);
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++    m_playbackState->setPosition(3.0);
++    EXPECT_EQ(m_keyStatesChangedCount, 0);
++
++    testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(3.1), m_audibleTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 67 }));
++
++    m_playbackState->setPosition(3.1);
++
++    EXPECT_EQ(m_controller->keyState(67), KeyState::Played);
++    EXPECT_EQ(m_keyStatesChangedCount, 1);
++}
++
++TEST_F(PianoKeyboardControllerTests, ResumeFromPauseWaitsForCountInAgain)
++{
++    ON_CALL(*m_configuration, isCountInEnabled()).WillByDefault(Return(true));
++    enableTracking();
++    m_playbackState->setPosition(3.0);
++
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(_, _)).Times(0);
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++    m_playbackState->setPosition(3.0);
++
++    testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(3.1), m_audibleTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 67 }));
++    m_playbackState->setPosition(3.1);
++    m_playbackState->setStatus(audio::PlaybackStatus::Paused);
++
++    testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(_, _)).Times(0);
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++    m_playbackState->setPosition(3.1);
++
++    testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(3.2), m_audibleTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 69 }));
++    m_playbackState->setPosition(3.2);
++
++    EXPECT_EQ(m_controller->keyState(67), KeyState::None);
++    EXPECT_EQ(m_controller->keyState(69), KeyState::Played);
++    EXPECT_EQ(m_keyStatesChangedCount, 3);
++}
++
++TEST_F(PianoKeyboardControllerTests, PositionChangesAreIgnoredUnlessRunningAndSameKeysDoNotNotify)
++{
++    enableTracking();
++
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(_, _)).Times(0);
++    m_playbackState->setPosition(1.0);
++    m_playbackState->setStatus(audio::PlaybackStatus::Paused);
++    m_playbackState->setPosition(2.0);
++    EXPECT_EQ(m_keyStatesChangedCount, 0);
++
++    testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(_, _))
++    .Times(2)
++    .WillRepeatedly(Return(std::vector<midi::note_idx_t> { 60 }));
++
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++    m_playbackState->setPosition(2.5);
++    m_playbackState->setPosition(2.5);
++
++    EXPECT_EQ(m_controller->keyState(60), KeyState::Played);
++    EXPECT_EQ(m_keyStatesChangedCount, 1);
++}
++
++TEST_F(PianoKeyboardControllerTests, PositionChangesReuseCachedAudibleTracks)
++{
++    enableTracking();
++    m_playbackState->setPosition(1.0);
++
++    EXPECT_CALL(*m_playbackController, audibleInstrumentTrackIds())
++    .Times(1)
++    .WillOnce(Return(m_audibleTracks));
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(_, m_audibleTracks))
++    .Times(3)
++    .WillRepeatedly(Return(std::vector<midi::note_idx_t> { 60 }));
++
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++    m_playbackState->setPosition(2.0);
++    m_playbackState->setPosition(3.0);
++}
++
++TEST_F(PianoKeyboardControllerTests, PlaybackTrackChangesInvalidateAudibleTracksCache)
++{
++    enableTracking();
++    m_playbackState->setPosition(1.0);
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), m_audibleTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 60 }));
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++
++    const engraving::InstrumentTrackIdSet replacementTracks = { makeTrackId(2, u"violin") };
++    EXPECT_CALL(*m_playbackController, audibleInstrumentTrackIds())
++    .WillOnce(Return(replacementTracks));
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), replacementTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 67 }));
++
++    m_trackAdded.send(42);
++
++    EXPECT_EQ(m_controller->keyState(60), KeyState::None);
++    EXPECT_EQ(m_controller->keyState(67), KeyState::Played);
++
++    const engraving::InstrumentTrackIdSet removedTrackResult = { makeTrackId(3, u"flute") };
++    EXPECT_CALL(*m_playbackController, audibleInstrumentTrackIds())
++    .WillOnce(Return(removedTrackResult));
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), removedTrackResult))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 69 }));
++
++    m_trackRemoved.send(42);
++
++    EXPECT_EQ(m_controller->keyState(67), KeyState::None);
++    EXPECT_EQ(m_controller->keyState(69), KeyState::Played);
++
++    const engraving::InstrumentTrackIdSet initializedTrackResult = { makeTrackId(4, u"trumpet") };
++    EXPECT_CALL(*m_playbackController, audibleInstrumentTrackIds())
++    .WillOnce(Return(initializedTrackResult));
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), initializedTrackResult))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 72 }));
++
++    m_playbackInitedChanged.send(true);
++
++    EXPECT_EQ(m_controller->keyState(69), KeyState::None);
++    EXPECT_EQ(m_controller->keyState(72), KeyState::Played);
++}
++
++TEST_F(PianoKeyboardControllerTests, PauseStopAndResumePreservePressedKey)
++{
++    m_controller->setPressedKey(60);
++    enableTracking();
++    m_playbackState->setPosition(1.0);
++    ON_CALL(*m_notationPlayback, activePlaybackPitches(_, _))
++    .WillByDefault(Return(std::vector<midi::note_idx_t> { 64 }));
++
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++    EXPECT_EQ(m_controller->keyState(60), KeyState::Played);
++    EXPECT_EQ(m_controller->keyState(64), KeyState::Played);
++
++    m_playbackState->setStatus(audio::PlaybackStatus::Paused);
++    EXPECT_EQ(m_controller->keyState(60), KeyState::Played);
++    EXPECT_EQ(m_controller->keyState(64), KeyState::None);
++
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++    EXPECT_EQ(m_controller->keyState(64), KeyState::Played);
++
++    m_playbackState->setStatus(audio::PlaybackStatus::Stopped);
++    EXPECT_EQ(m_controller->keyState(60), KeyState::Played);
++    EXPECT_EQ(m_controller->keyState(64), KeyState::None);
++}
++
++TEST_F(PianoKeyboardControllerTests, PlaybackPreservesSelectionAndMidiStates)
++{
++    muse::ValCh<bool> useWrittenPitch;
++    useWrittenPitch.val = true;
++    ON_CALL(*m_configuration, midiUseWrittenPitch()).WillByDefault(Return(useWrittenPitch));
++
++    std::unique_ptr<engraving::MasterScore> score(engraving::compat::ScoreAccess::createMasterScore(nullptr));
++    auto chord = engraving::Factory::makeChord(score->dummy()->segment());
++    engraving::Note* note60 = engraving::Factory::createNote(chord.get());
++    note60->setPitch(60);
++    chord->add(note60);
++    engraving::Note* note64 = engraving::Factory::createNote(chord.get());
++    note64->setPitch(64);
++    chord->add(note64);
++
++    auto selection = std::make_shared<NiceMock<NotationSelectionMock> >();
++    ON_CALL(*selection, isNone()).WillByDefault(Return(false));
++    ON_CALL(*selection, notes(_)).WillByDefault(Return(std::vector<engraving::Note*> { note60 }));
++    ON_CALL(*m_interaction, selection()).WillByDefault(Return(selection));
++    m_selectionChanged.notify();
++
++    EXPECT_EQ(m_controller->keyState(60), KeyState::Selected);
++    EXPECT_EQ(m_controller->keyState(64), KeyState::OtherInSelectedChord);
++    EXPECT_FALSE(m_controller->isFromMidi());
++
++    enableTracking();
++    m_playbackState->setPosition(1.0);
++    ON_CALL(*m_notationPlayback, activePlaybackPitches(_, _))
++    .WillByDefault(Return(std::vector<midi::note_idx_t> { 60, 67 }));
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++
++    EXPECT_EQ(m_controller->keyState(60), KeyState::Played);
++    EXPECT_EQ(m_controller->keyState(64), KeyState::OtherInSelectedChord);
++    EXPECT_EQ(m_controller->keyState(67), KeyState::Played);
++
++    m_midiInput->sendNotes({ note64 });
++    EXPECT_TRUE(m_controller->isFromMidi());
++    EXPECT_EQ(m_controller->keyState(60), KeyState::Played);
++    EXPECT_EQ(m_controller->keyState(64), KeyState::Selected);
++    EXPECT_EQ(m_controller->keyState(67), KeyState::Played);
++
++    m_playbackState->setStatus(audio::PlaybackStatus::Paused);
++    EXPECT_TRUE(m_controller->isFromMidi());
++    EXPECT_EQ(m_controller->keyState(60), KeyState::OtherInSelectedChord);
++    EXPECT_EQ(m_controller->keyState(64), KeyState::Selected);
++    EXPECT_EQ(m_controller->keyState(67), KeyState::None);
++}
++
++TEST_F(PianoKeyboardControllerTests, SeekReplacesPlaybackKeys)
++{
++    enableTracking();
++    m_playbackState->setPosition(1.0);
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 60 }));
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(8.0), _))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 72 }));
++
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++    m_playbackState->setPosition(8.0);
++
++    EXPECT_EQ(m_controller->keyState(60), KeyState::None);
++    EXPECT_EQ(m_controller->keyState(72), KeyState::Played);
++    EXPECT_EQ(m_keyStatesChangedCount, 2);
++}
++
++TEST_F(PianoKeyboardControllerTests, AudibleTracksChangeRefreshesAtSamePosition)
++{
++    enableTracking();
++    m_playbackState->setPosition(1.0);
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), m_audibleTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 60 }));
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++
++    const engraving::InstrumentTrackIdSet replacementTracks = { makeTrackId(2, u"violin") };
++    EXPECT_CALL(*m_playbackController, audibleInstrumentTrackIds())
++    .WillOnce(Return(replacementTracks));
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), replacementTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 67 }));
++
++    m_soloMuteState->setTrackSoloMuteState(*replacementTracks.cbegin(), { false, true });
++
++    EXPECT_EQ(m_controller->keyState(60), KeyState::None);
++    EXPECT_EQ(m_controller->keyState(67), KeyState::Played);
++    EXPECT_EQ(m_keyStatesChangedCount, 2);
++}
++
++TEST_F(PianoKeyboardControllerTests, ChordSymbolsConfigurationChangeRefreshesAtSamePosition)
++{
++    enableTracking();
++    m_playbackState->setPosition(1.0);
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 60 }));
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++
++    const engraving::InstrumentTrackIdSet replacementTracks = { makeTrackId(2, u"chord-symbols") };
++    EXPECT_CALL(*m_playbackController, audibleInstrumentTrackIds())
++    .WillOnce(Return(replacementTracks));
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), replacementTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 64 }));
++
++    m_playChordSymbolsChanged.notify();
++
++    EXPECT_EQ(m_controller->keyState(60), KeyState::None);
++    EXPECT_EQ(m_controller->keyState(64), KeyState::Played);
++    EXPECT_EQ(m_keyStatesChangedCount, 2);
++}
++
++TEST_F(PianoKeyboardControllerTests, SelectionChangeRefreshesRangePlaybackAtSamePosition)
++{
++    enableTracking();
++    m_playbackState->setPosition(1.0);
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 60 }));
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++
++    const engraving::InstrumentTrackIdSet replacementTracks = { makeTrackId(2, u"violin") };
++    EXPECT_CALL(*m_playbackController, audibleInstrumentTrackIds())
++    .WillOnce(Return(replacementTracks));
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), replacementTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 72 }));
++
++    m_selectionChanged.notify();
++
++    EXPECT_EQ(m_controller->keyState(60), KeyState::None);
++    EXPECT_EQ(m_controller->keyState(72), KeyState::Played);
++    EXPECT_EQ(m_keyStatesChangedCount, 2);
++}
++
++TEST_F(PianoKeyboardControllerTests, DisabledTrackingDoesNotQueryOrNotifyAndReopenRefreshes)
++{
++    m_playbackState->setPosition(2.0);
++    ON_CALL(*m_configuration, isCountInEnabled()).WillByDefault(Return(true));
++
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(_, _)).Times(0);
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++    m_playbackState->setPosition(2.0);
++    m_playbackState->setPosition(2.1);
++    m_soloMuteState->setTrackSoloMuteState(*m_audibleTracks.cbegin(), { true, false });
++    m_playChordSymbolsChanged.notify();
++    m_selectionChanged.notify();
++    EXPECT_EQ(m_keyStatesChangedCount, 0);
++
++    testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(2.1), m_audibleTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 69 }));
++
++    enableTracking();
++
++    EXPECT_EQ(m_controller->keyState(69), KeyState::Played);
++    EXPECT_EQ(m_keyStatesChangedCount, 1);
++
++    m_controller->setPlaybackTrackingEnabled(false);
++    EXPECT_EQ(m_controller->keyState(69), KeyState::None);
++    EXPECT_EQ(m_keyStatesChangedCount, 1);
++
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(2.1), m_audibleTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 69 }));
++    enableTracking();
++    EXPECT_EQ(m_controller->keyState(69), KeyState::Played);
++    EXPECT_EQ(m_keyStatesChangedCount, 2);
++}
++
++TEST_F(PianoKeyboardControllerTests, CurrentNotationSwitchRefreshesAndDisconnectsOldSoloMuteState)
++{
++    enableTracking();
++    m_playbackState->setPosition(1.0);
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 60 }));
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++
++    auto replacementSoloMuteState = std::make_shared<NotationSoloMuteStateFake>();
++    auto replacementInteraction = std::make_shared<NiceMock<NotationInteractionMock> >();
++    auto replacementMidiInput = std::make_shared<NotationMidiInputFake>();
++    auto replacementNotation = std::make_shared<NiceMock<NotationMock> >();
++    ON_CALL(*replacementNotation, soloMuteState()).WillByDefault(Return(replacementSoloMuteState));
++    ON_CALL(*replacementNotation, interaction()).WillByDefault(Return(replacementInteraction));
++    ON_CALL(*replacementNotation, midiInput()).WillByDefault(Return(replacementMidiInput));
++
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), m_audibleTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 65 }));
++    m_globalContext->setCurrentNotation(replacementNotation);
++
++    EXPECT_EQ(m_controller->keyState(60), KeyState::None);
++    EXPECT_EQ(m_controller->keyState(65), KeyState::Played);
++
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(_, _)).Times(0);
++    m_soloMuteState->setTrackSoloMuteState(*m_audibleTracks.cbegin(), { true, false });
++
++    testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), m_audibleTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 69 }));
++    replacementSoloMuteState->setTrackSoloMuteState(*m_audibleTracks.cbegin(), { false, true });
++
++    EXPECT_EQ(m_controller->keyState(65), KeyState::None);
++    EXPECT_EQ(m_controller->keyState(69), KeyState::Played);
++}
++
++TEST_F(PianoKeyboardControllerTests, MasterNotationSwitchAndMissingMasterRefreshPlayback)
++{
++    enableTracking();
++    m_playbackState->setPosition(1.0);
++    EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 60 }));
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++
++    auto replacementPlayback = std::make_shared<NiceMock<NotationPlaybackMock> >();
++    auto replacementMaster = std::make_shared<NiceMock<MasterNotationMock> >();
++    ON_CALL(*replacementMaster, playback()).WillByDefault(Return(replacementPlayback));
++    EXPECT_CALL(*replacementPlayback, activePlaybackPitches(audio::secs_t(1.0), m_audibleTracks))
++    .WillOnce(Return(std::vector<midi::note_idx_t> { 65 }));
++
++    m_globalContext->setCurrentMasterNotation(replacementMaster);
++    EXPECT_EQ(m_controller->keyState(60), KeyState::None);
++    EXPECT_EQ(m_controller->keyState(65), KeyState::Played);
++
++    m_globalContext->setCurrentMasterNotation(nullptr);
++    EXPECT_EQ(m_controller->keyState(65), KeyState::None);
++}
++
++TEST_F(PianoKeyboardControllerTests, DestructionDisconnectsPlaybackSubscriptions)
++{
++    m_controller->keyStatesChanged().disconnect(this);
++    m_controller.reset();
++
++    m_playbackState->setStatus(audio::PlaybackStatus::Running);
++    m_playbackState->setPosition(10.0);
++    SUCCEED();
++}
+diff --git a/src/playback/internal/playbackcontroller.cpp b/src/playback/internal/playbackcontroller.cpp
+index 116ff8ea..e8bc8f81 100644
+--- a/src/playback/internal/playbackcontroller.cpp
++++ b/src/playback/internal/playbackcontroller.cpp
+@@ -99,6 +99,34 @@ static std::string resolveAuxTrackTitle(aux_channel_idx_t index, const AudioOutp
+     return muse::mtrc("playback", "Aux %1").arg(index + 1).toStdString();
+ }
+ 
++std::vector<mu::playback::detail::EffectiveTrackSoloMuteState> mu::playback::detail::resolveEffectiveTrackSoloMuteStates(
++    const std::vector<InstrumentTrackSoloMuteState>& trackStates, bool playChordSymbols, bool isRangePlaybackMode,
++    const InstrumentTrackIdSet& allowedInstrumentTrackIds)
++{
++    bool hasSolo = false;
++    for (const auto& state : trackStates) {
++        if (!state.isMetronome && state.hasPlaybackTrack && state.soloMuteState.solo) { hasSolo = true; break; }
++    }
++    std::vector<EffectiveTrackSoloMuteState> result;
++    for (const auto& state : trackStates) {
++        if (!state.hasPlaybackTrack || state.isMetronome) continue;
++        bool shouldForceMute = hasSolo && !state.soloMuteState.solo;
++        if (state.isChordSymbols && !shouldForceMute) shouldForceMute = !playChordSymbols;
++        if (isRangePlaybackMode && !shouldForceMute) shouldForceMute = !muse::contains(allowedInstrumentTrackIds, state.instrumentTrackId);
++        result.push_back({ state.instrumentTrackId, state.soloMuteState, shouldForceMute });
++    }
++    return result;
++}
++
++InstrumentTrackIdSet mu::playback::detail::audibleInstrumentTrackIds(const std::vector<EffectiveTrackSoloMuteState>& trackStates)
++{
++    InstrumentTrackIdSet result;
++    for (const auto& state : trackStates) {
++        if (!state.soloMuteState.mute && !state.forceMute) result.insert(state.instrumentTrackId);
++    }
++    return result;
++}
++
+ PlaybackController::PlaybackController(const muse::modularity::ContextPtr& iocCtx)
+     : muse::Contextable(iocCtx), m_drumsetLoader(iocCtx), m_onlineSoundsController(std::make_unique<OnlineSoundsController>(iocCtx))
+ {
+@@ -279,6 +307,11 @@ const IPlaybackController::InstrumentTrackIdMap& PlaybackController::instrumentT
+     return m_instrumentTrackIdMap;
+ }
+ 
++InstrumentTrackIdSet PlaybackController::audibleInstrumentTrackIds() const
++{
++    return detail::audibleInstrumentTrackIds(effectiveTrackSoloMuteStates());
++}
++
+ const IPlaybackController::AuxTrackIdMap& PlaybackController::auxTrackIdMap() const
+ {
+     return m_auxTrackIdMap;
+@@ -289,6 +322,11 @@ Channel<TrackId> PlaybackController::trackAdded() const
+     return m_trackAdded;
+ }
+ 
++Channel<bool> PlaybackController::playbackInitedChanged() const
++{
++    return m_playbackInitedChanged;
++}
++
+ Channel<TrackId> PlaybackController::trackRemoved() const
+ {
+     return m_trackRemoved;
+@@ -1334,6 +1372,7 @@ void PlaybackController::setupNewCurrentSequence(const TrackSequenceId sequenceI
+     setupSequencePlayer();
+ 
+     m_currentSequenceIdChanged.notify();
++    m_playbackInitedChanged.send(true);
+ }
+ 
+ void PlaybackController::subscribeOnAudioParamsChanges()
+@@ -1502,50 +1541,13 @@ void PlaybackController::updateSoloMuteStates()
+ 
+     TRACEFUNC;
+ 
+-    InstrumentTrackIdSet existingTrackIdSet = notationPlayback()->existingTrackIdSet();
+-    bool hasSolo = false;
+-
+-    for (const InstrumentTrackId& instrumentTrackId : existingTrackIdSet) {
+-        if (instrumentTrackId == notationPlayback()->metronomeTrackId()) {
+-            continue;
+-        }
+-        if (m_notation->soloMuteState()->trackSoloMuteState(instrumentTrackId).solo) {
+-            hasSolo = true;
+-            break;
+-        }
+-    }
+-
+-    InstrumentTrackIdSet allowedInstrumentTrackIdSet = instrumentTrackIdSetForRangePlayback();
+-    bool isRangePlaybackMode = !m_isExportingAudio && selection()->isRange() && !allowedInstrumentTrackIdSet.empty();
+-
+-    for (const InstrumentTrackId& instrumentTrackId : existingTrackIdSet) {
+-        if (!muse::contains(m_instrumentTrackIdMap, instrumentTrackId)) {
+-            continue;
+-        }
+-
+-        if (instrumentTrackId == notationPlayback()->metronomeTrackId()) {
+-            continue;
+-        }
+-
+-        // 1. Recall the solo-mute state for this notation
+-        const auto& soloMuteState = m_notation->soloMuteState()->trackSoloMuteState(instrumentTrackId);
+-
+-        // 2. Evaluate "force mute" (disabling the mute button)
+-        bool shouldForceMute = hasSolo && !soloMuteState.solo;
+-        if (notationPlayback()->isChordSymbolsTrack(instrumentTrackId) && !shouldForceMute) {
+-            shouldForceMute = !notationConfiguration()->isPlayChordSymbolsEnabled();
+-        }
+-
+-        if (isRangePlaybackMode && !shouldForceMute) {
+-            shouldForceMute = !muse::contains(allowedInstrumentTrackIdSet, instrumentTrackId);
+-        }
+-
+-        // 3. Update params for playback / mixer
++    const auto states = effectiveTrackSoloMuteStates();
++    for (const auto& state : states) {
++        const InstrumentTrackId& instrumentTrackId = state.instrumentTrackId;
+         AudioOutputParams params = trackOutputParams(instrumentTrackId);
+-        params.solo = soloMuteState.solo;
+-        params.muted = soloMuteState.mute || shouldForceMute;
+-        params.forceMute = shouldForceMute;
+-
++        params.solo = state.soloMuteState.solo;
++        params.muted = state.soloMuteState.mute || state.forceMute;
++        params.forceMute = state.forceMute;
+         audio::TrackId trackId = m_instrumentTrackIdMap.at(instrumentTrackId);
+         playback()->setOutputParams(m_currentSequenceId, trackId, std::move(params));
+     }
+@@ -1553,6 +1555,27 @@ void PlaybackController::updateSoloMuteStates()
+     updateAuxMuteStates();
+ }
+ 
++std::vector<detail::EffectiveTrackSoloMuteState> PlaybackController::effectiveTrackSoloMuteStates() const
++{
++    if (!m_notation || !notationPlayback()) return {};
++    InstrumentTrackIdSet existingTrackIdSet = notationPlayback()->existingTrackIdSet();
++    const InstrumentTrackId metronomeTrackId = notationPlayback()->metronomeTrackId();
++    std::vector<detail::InstrumentTrackSoloMuteState> trackStates;
++    trackStates.reserve(existingTrackIdSet.size());
++    for (const InstrumentTrackId& instrumentTrackId : existingTrackIdSet) {
++        const bool isMetronome = instrumentTrackId == metronomeTrackId;
++        const bool hasPlaybackTrack = muse::contains(m_instrumentTrackIdMap, instrumentTrackId);
++        const bool isChordSymbols = hasPlaybackTrack && !isMetronome && notationPlayback()->isChordSymbolsTrack(instrumentTrackId);
++        SoloMuteState soloMuteState;
++        if (!isMetronome) soloMuteState = m_notation->soloMuteState()->trackSoloMuteState(instrumentTrackId);
++        trackStates.push_back({ instrumentTrackId, soloMuteState, hasPlaybackTrack, isMetronome, isChordSymbols });
++    }
++    InstrumentTrackIdSet allowedInstrumentTrackIdSet = instrumentTrackIdSetForRangePlayback();
++    bool isRangePlaybackMode = !m_isExportingAudio && selection()->isRange() && !allowedInstrumentTrackIdSet.empty();
++    return detail::resolveEffectiveTrackSoloMuteStates(trackStates, notationConfiguration()->isPlayChordSymbolsEnabled(),
++                                                       isRangePlaybackMode, allowedInstrumentTrackIdSet);
++}
++
+ void PlaybackController::updateAuxMuteStates()
+ {
+     for (const auto& pair : m_auxTrackIdMap) {
+diff --git a/src/playback/internal/playbackcontroller.h b/src/playback/internal/playbackcontroller.h
+index 2ba2692a..2a6d7c78 100644
+--- a/src/playback/internal/playbackcontroller.h
++++ b/src/playback/internal/playbackcontroller.h
+@@ -45,6 +45,24 @@
+ 
+ namespace mu::playback {
+ class OnlineSoundsController;
++namespace detail {
++struct InstrumentTrackSoloMuteState {
++    engraving::InstrumentTrackId instrumentTrackId;
++    IPlaybackController::SoloMuteState soloMuteState;
++    bool hasPlaybackTrack = false;
++    bool isMetronome = false;
++    bool isChordSymbols = false;
++};
++struct EffectiveTrackSoloMuteState {
++    engraving::InstrumentTrackId instrumentTrackId;
++    IPlaybackController::SoloMuteState soloMuteState;
++    bool forceMute = false;
++};
++std::vector<EffectiveTrackSoloMuteState> resolveEffectiveTrackSoloMuteStates(
++    const std::vector<InstrumentTrackSoloMuteState>& trackStates, bool playChordSymbols, bool isRangePlaybackMode,
++    const engraving::InstrumentTrackIdSet& allowedInstrumentTrackIds);
++engraving::InstrumentTrackIdSet audibleInstrumentTrackIds(const std::vector<EffectiveTrackSoloMuteState>& trackStates);
++}
+ class PlaybackController : public IPlaybackController, public muse::actions::Actionable, public muse::async::Asyncable,
+     public muse::Contextable
+ {
+@@ -77,10 +95,12 @@ public:
+     muse::async::Notification currentTrackSequenceIdChanged() const override;
+ 
+     const InstrumentTrackIdMap& instrumentTrackIdMap() const override;
++    engraving::InstrumentTrackIdSet audibleInstrumentTrackIds() const override;
+     const AuxTrackIdMap& auxTrackIdMap() const override;
+ 
+     muse::async::Channel<muse::audio::TrackId> trackAdded() const override;
+     muse::async::Channel<muse::audio::TrackId> trackRemoved() const override;
++    muse::async::Channel<bool> playbackInitedChanged() const override;
+ 
+     std::string auxChannelName(muse::audio::aux_channel_idx_t index) const override;
+     muse::async::Channel<muse::audio::aux_channel_idx_t, std::string> auxChannelNameChanged() const override;
+@@ -180,6 +200,7 @@ private:
+     muse::audio::secs_t playbackStartSecs() const;
+ 
+     notation::InstrumentTrackIdSet instrumentTrackIdSetForRangePlayback() const;
++    std::vector<detail::EffectiveTrackSoloMuteState> effectiveTrackSoloMuteStates() const;
+ 
+     void togglePlayRepeats();
+     void togglePlayChordSymbols();
+@@ -250,6 +271,7 @@ private:
+ 
+     muse::async::Channel<muse::audio::TrackId> m_trackAdded;
+     muse::async::Channel<muse::audio::TrackId> m_trackRemoved;
++    muse::async::Channel<bool> m_playbackInitedChanged;
+ 
+     muse::async::Channel<muse::audio::aux_channel_idx_t, std::string> m_auxChannelNameChanged;
+ 
+diff --git a/src/playback/iplaybackcontroller.h b/src/playback/iplaybackcontroller.h
+index 4013dd22..0cd30fba 100644
+--- a/src/playback/iplaybackcontroller.h
++++ b/src/playback/iplaybackcontroller.h
+@@ -58,12 +58,14 @@ public:
+ 
+     using InstrumentTrackIdMap = std::unordered_map<engraving::InstrumentTrackId, muse::audio::TrackId>;
+     virtual const InstrumentTrackIdMap& instrumentTrackIdMap() const = 0;
++    virtual engraving::InstrumentTrackIdSet audibleInstrumentTrackIds() const = 0;
+ 
+     using AuxTrackIdMap = std::map<muse::audio::aux_channel_idx_t, muse::audio::TrackId>;
+     virtual const AuxTrackIdMap& auxTrackIdMap() const = 0;
+ 
+     virtual muse::async::Channel<muse::audio::TrackId> trackAdded() const = 0;
+     virtual muse::async::Channel<muse::audio::TrackId> trackRemoved() const = 0;
++    virtual muse::async::Channel<bool> playbackInitedChanged() const = 0;
+ 
+     virtual std::string auxChannelName(muse::audio::aux_channel_idx_t index) const = 0;
+     virtual muse::async::Channel<muse::audio::aux_channel_idx_t, std::string> auxChannelNameChanged() const = 0;
+diff --git a/src/playback/tests/CMakeLists.txt b/src/playback/tests/CMakeLists.txt
+index 75dd4355..b50b8108 100644
+--- a/src/playback/tests/CMakeLists.txt
++++ b/src/playback/tests/CMakeLists.txt
+@@ -22,6 +22,7 @@ set(MODULE_TEST playback_test)
+ 
+ set(MODULE_TEST_SRC
+     ${CMAKE_CURRENT_LIST_DIR}/mocks/playbackcontrollermock.h
++    ${CMAKE_CURRENT_LIST_DIR}/playbackcontroller_tests.cpp
+ )
+ 
+ set(MODULE_TEST_LINK playback)
+diff --git a/src/playback/tests/mocks/playbackcontrollermock.h b/src/playback/tests/mocks/playbackcontrollermock.h
+index 8fb68910..d6795e05 100644
+--- a/src/playback/tests/mocks/playbackcontrollermock.h
++++ b/src/playback/tests/mocks/playbackcontrollermock.h
+@@ -44,11 +44,13 @@ public:
+     MOCK_METHOD(muse::async::Notification, currentTrackSequenceIdChanged, (), (const, override));
+ 
+     MOCK_METHOD(const InstrumentTrackIdMap&, instrumentTrackIdMap, (), (const, override));
++    MOCK_METHOD(engraving::InstrumentTrackIdSet, audibleInstrumentTrackIds, (), (const, override));
+ 
+     MOCK_METHOD(const AuxTrackIdMap&, auxTrackIdMap, (), (const, override));
+ 
+     MOCK_METHOD(muse::async::Channel<muse::audio::TrackId>, trackAdded, (), (const, override));
+     MOCK_METHOD(muse::async::Channel<muse::audio::TrackId>, trackRemoved, (), (const, override));
++    MOCK_METHOD(muse::async::Channel<bool>, playbackInitedChanged, (), (const, override));
+ 
+     MOCK_METHOD(std::string, auxChannelName, (muse::audio::aux_channel_idx_t), (const, override));
+     MOCK_METHOD((muse::async::Channel<muse::audio::aux_channel_idx_t, std::string>), auxChannelNameChanged, (), (const, override));
+diff --git a/src/playback/tests/playbackcontroller_tests.cpp b/src/playback/tests/playbackcontroller_tests.cpp
+new file mode 100644
+index 00000000..42799407
+--- /dev/null
++++ b/src/playback/tests/playbackcontroller_tests.cpp
+@@ -0,0 +1,177 @@
++/*
++ * SPDX-License-Identifier: GPL-3.0-only
++ * MuseScore-Studio-CLA-applies
++ *
++ * MuseScore Studio
++ * Music Composition & Notation
++ *
++ * Copyright (C) 2026 MuseScore Limited and others
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 3 as
++ * published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++#include <gtest/gtest.h>
++
++#include <vector>
++
++#include "playback/internal/playbackcontroller.h"
++
++using namespace mu::engraving;
++using namespace mu::playback;
++
++namespace {
++InstrumentTrackId makeTrackId(int partId)
++{
++    return { muse::ID(partId), u"instrument" };
++}
++
++detail::InstrumentTrackSoloMuteState makeTrackState(const InstrumentTrackId& trackId,
++                                                    bool mute = false,
++                                                    bool solo = false,
++                                                    bool hasPlaybackTrack = true,
++                                                    bool isMetronome = false,
++                                                    bool isChordSymbols = false)
++{
++    return { trackId, { mute, solo }, hasPlaybackTrack, isMetronome, isChordSymbols };
++}
++
++InstrumentTrackIdSet audibleTrackIds(
++    const std::vector<detail::InstrumentTrackSoloMuteState>& trackStates,
++    bool playChordSymbols = true,
++    bool isRangePlaybackMode = false,
++    const InstrumentTrackIdSet& allowedInstrumentTrackIds = {})
++{
++    return detail::audibleInstrumentTrackIds(
++        detail::resolveEffectiveTrackSoloMuteStates(trackStates,
++                                                    playChordSymbols,
++                                                    isRangePlaybackMode,
++                                                    allowedInstrumentTrackIds));
++}
++}
++
++TEST(PlaybackControllerTests, UnmutedPlaybackTracksAreAudible)
++{
++    const InstrumentTrackId firstTrackId = makeTrackId(1);
++    const InstrumentTrackId secondTrackId = makeTrackId(2);
++
++    const InstrumentTrackIdSet result = audibleTrackIds({
++        makeTrackState(firstTrackId),
++        makeTrackState(secondTrackId)
++    });
++
++    EXPECT_EQ(result.size(), 2u);
++    EXPECT_TRUE(result.contains(firstTrackId));
++    EXPECT_TRUE(result.contains(secondTrackId));
++}
++
++TEST(PlaybackControllerTests, PersistentOrExcerptMuteMakesTrackInaudible)
++{
++    const InstrumentTrackId mutedTrackId = makeTrackId(1);
++    const InstrumentTrackId audibleTrackId = makeTrackId(2);
++
++    const InstrumentTrackIdSet result = audibleTrackIds({
++        makeTrackState(mutedTrackId, true),
++        makeTrackState(audibleTrackId)
++    });
++
++    EXPECT_FALSE(result.contains(mutedTrackId));
++    EXPECT_TRUE(result.contains(audibleTrackId));
++}
++
++TEST(PlaybackControllerTests, SoloMakesNonSoloTracksInaudible)
++{
++    const InstrumentTrackId soloTrackId = makeTrackId(1);
++    const InstrumentTrackId nonSoloTrackId = makeTrackId(2);
++
++    const InstrumentTrackIdSet result = audibleTrackIds({
++        makeTrackState(soloTrackId, false, true),
++        makeTrackState(nonSoloTrackId)
++    });
++
++    EXPECT_TRUE(result.contains(soloTrackId));
++    EXPECT_FALSE(result.contains(nonSoloTrackId));
++}
++
++TEST(PlaybackControllerTests, DisabledChordSymbolsTrackIsInaudible)
++{
++    const InstrumentTrackId notationTrackId = makeTrackId(1);
++    const InstrumentTrackId chordSymbolsTrackId = makeTrackId(2);
++    const std::vector<detail::InstrumentTrackSoloMuteState> trackStates = {
++        makeTrackState(notationTrackId),
++        makeTrackState(chordSymbolsTrackId, false, false, true, false, true)
++    };
++
++    const InstrumentTrackIdSet disabledResult = audibleTrackIds(trackStates, false);
++    const InstrumentTrackIdSet enabledResult = audibleTrackIds(trackStates, true);
++
++    EXPECT_FALSE(disabledResult.contains(chordSymbolsTrackId));
++    EXPECT_TRUE(disabledResult.contains(notationTrackId));
++    EXPECT_TRUE(enabledResult.contains(chordSymbolsTrackId));
++}
++
++TEST(PlaybackControllerTests, RangePlaybackOnlyAllowsSelectedTracks)
++{
++    const InstrumentTrackId selectedTrackId = makeTrackId(1);
++    const InstrumentTrackId outsideRangeTrackId = makeTrackId(2);
++    const InstrumentTrackIdSet allowedInstrumentTrackIds = { selectedTrackId };
++
++    const InstrumentTrackIdSet result = audibleTrackIds({
++        makeTrackState(selectedTrackId),
++        makeTrackState(outsideRangeTrackId)
++    }, true, true, allowedInstrumentTrackIds);
++
++    EXPECT_TRUE(result.contains(selectedTrackId));
++    EXPECT_FALSE(result.contains(outsideRangeTrackId));
++}
++
++TEST(PlaybackControllerTests, MetronomeIsExcludedAndDoesNotActivateSolo)
++{
++    const InstrumentTrackId notationTrackId = makeTrackId(1);
++    const InstrumentTrackId metronomeTrackId = makeTrackId(2);
++
++    const InstrumentTrackIdSet result = audibleTrackIds({
++        makeTrackState(notationTrackId),
++        makeTrackState(metronomeTrackId, false, true, true, true)
++    });
++
++    EXPECT_TRUE(result.contains(notationTrackId));
++    EXPECT_FALSE(result.contains(metronomeTrackId));
++}
++
++TEST(PlaybackControllerTests, TrackWithoutPlaybackChannelIsInaudible)
++{
++    const InstrumentTrackId loadedTrackId = makeTrackId(1);
++    const InstrumentTrackId unloadedTrackId = makeTrackId(2);
++
++    const InstrumentTrackIdSet result = audibleTrackIds({
++        makeTrackState(loadedTrackId),
++        makeTrackState(unloadedTrackId, false, false, false)
++    });
++
++    EXPECT_TRUE(result.contains(loadedTrackId));
++    EXPECT_FALSE(result.contains(unloadedTrackId));
++}
++
++TEST(PlaybackControllerTests, SoloTrackWithoutPlaybackChannelDoesNotMuteLoadedTracks)
++{
++    const InstrumentTrackId loadedTrackId = makeTrackId(1);
++    const InstrumentTrackId unloadedSoloTrackId = makeTrackId(2);
++
++    const InstrumentTrackIdSet result = audibleTrackIds({
++        makeTrackState(loadedTrackId),
++        makeTrackState(unloadedSoloTrackId, false, true, false)
++    });
++
++    EXPECT_TRUE(result.contains(loadedTrackId));
++    EXPECT_FALSE(result.contains(unloadedSoloTrackId));
++}
+diff --git a/src/stubs/playback/playbackcontrollerstub.cpp b/src/stubs/playback/playbackcontrollerstub.cpp
+index c2d7fd18..2571cd67 100644
+--- a/src/stubs/playback/playbackcontrollerstub.cpp
++++ b/src/stubs/playback/playbackcontrollerstub.cpp
+@@ -69,12 +69,22 @@ const IPlaybackController::InstrumentTrackIdMap& PlaybackControllerStub::instrum
+     return m;
+ }
+ 
++engraving::InstrumentTrackIdSet PlaybackControllerStub::audibleInstrumentTrackIds() const
++{
++    return {};
++}
++
+ const IPlaybackController::AuxTrackIdMap& PlaybackControllerStub::auxTrackIdMap() const
+ {
+     static const AuxTrackIdMap m;
+     return m;
+ }
+ 
++muse::async::Channel<bool> PlaybackControllerStub::playbackInitedChanged() const
++{
++    return {};
++}
++
+ muse::async::Channel<muse::audio::TrackId> PlaybackControllerStub::trackAdded() const
+ {
+     return {};
+diff --git a/src/stubs/playback/playbackcontrollerstub.h b/src/stubs/playback/playbackcontrollerstub.h
+index 6515835b..19266c43 100644
+--- a/src/stubs/playback/playbackcontrollerstub.h
++++ b/src/stubs/playback/playbackcontrollerstub.h
+@@ -42,10 +42,12 @@ public:
+     muse::async::Notification currentTrackSequenceIdChanged() const override;
+ 
+     const InstrumentTrackIdMap& instrumentTrackIdMap() const override;
++    engraving::InstrumentTrackIdSet audibleInstrumentTrackIds() const override;
+     const AuxTrackIdMap& auxTrackIdMap() const override;
+ 
+     muse::async::Channel<muse::audio::TrackId> trackAdded() const override;
+     muse::async::Channel<muse::audio::TrackId> trackRemoved() const override;
++    muse::async::Channel<bool> playbackInitedChanged() const override;
+ 
+     std::string auxChannelName(muse::audio::aux_channel_idx_t index) const override;
+     muse::async::Channel<muse::audio::aux_channel_idx_t, std::string> auxChannelNameChanged() const override;

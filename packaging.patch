@@ -1,0 +1,124 @@
+diff --git a/buildscripts/packaging/macOS/package.sh b/buildscripts/packaging/macOS/package.sh
+index c151d289..d1fb2456 100755
+--- a/buildscripts/packaging/macOS/package.sh
++++ b/buildscripts/packaging/macOS/package.sh
+@@ -23,6 +23,8 @@ while [[ "$#" -gt 0 ]]; do
+     shift
+ done
+ 
++SIGN_IDENTITY=${SIGN_IDENTITY:-"Developer ID Application: MuseScore"}
++
+ ################################################################
+ # Deploy
+ ################################################################
+@@ -34,16 +36,31 @@ otool -L ${APP_PATH}/Contents/MacOS/mscore
+ 
+ echo "macdeployqt"
+ if $DO_SIGN; then
+-    sign_args="-sign-for-notarization=Developer ID Application: MuseScore"
++    sign_args="-sign-for-notarization=${SIGN_IDENTITY}"
+ else
+     sign_args=""
+ fi
++APPEX="${APP_PATH}/Contents/PlugIns/MuseScoreQuickLookPreviewExtension.appex"
++appex_args=""
++if [ -d "$APPEX" ]; then
++    appex_args="-executable=${APPEX}/Contents/MacOS/MuseScoreQuickLookPreviewExtension"
++fi
+ macdeployqt ${APP_PATH} \
+     -verbose=2 \
+     -qmldir=. \
+-    -executable="${APP_PATH}/Contents/PlugIns/MuseScoreQuickLookPreviewExtension.appex/Contents/MacOS/MuseScoreQuickLookPreviewExtension" \
++    $appex_args \
+     $sign_args
+ 
++# Remove the Qt parts macdeployqt copies in that the app never loads: control styles of other platforms, and SQL
++for style in Imagine Material Universal FluentWinUI3; do
++    rm -rf "${APP_PATH}"/Contents/Frameworks/QtQuickControls2${style}*.framework
++    rm -f "${APP_PATH}"/Contents/PlugIns/quick/libqtquickcontrols2$(echo "$style" | tr '[:upper:]' '[:lower:]')*.dylib
++    rm -rf "${APP_PATH}/Contents/Resources/qml/QtQuick/Controls/${style}"
++done
++rm -rf "${APP_PATH}/Contents/Resources/qml/QtQuick/Controls/iOS" "${APP_PATH}/Contents/Resources/qml/QtQuick/LocalStorage"
++rm -rf "${APP_PATH}/Contents/Frameworks/QtSql.framework" "${APP_PATH}/Contents/Frameworks/QtQmlLocalStorage.framework" "${APP_PATH}/Contents/PlugIns/sqldrivers"
++rm -f "${APP_PATH}/Contents/PlugIns/quick/libqmllocalstorageplugin.dylib"
++
+ echo "otool -L post-macdeployqt"
+ otool -L ${APP_PATH}/Contents/MacOS/mscore
+ 
+@@ -60,42 +77,50 @@ mv ${APP_PATH}/Contents/Resources/qml ${APP_PATH}/Contents/Resources/qml_mu
+ sed -i '' 's:Resources/qml:Resources/qml_mu:g' ${APP_PATH}/Contents/Resources/qt.conf
+ 
+ if $DO_SIGN; then
+-    # Re-sign appex to ensure proper entitlements
+-    echo "Re-sign appex"
+-    codesign --force \
+-        --options runtime \
+-        --entitlements "src/macos_integration/entitlements.plist" \
+-        -s "Developer ID Application: MuseScore" \
+-        "${APP_PATH}/Contents/PlugIns/MuseScoreQuickLookPreviewExtension.appex"
++    if [ -d "$APPEX" ]; then
++        codesign --force \
++            --options runtime \
++            --entitlements "src/macos_integration/entitlements.plist" \
++            -s "${SIGN_IDENTITY}" \
++            "$APPEX"
++    fi
+ 
+     # Re-sign main app after removing dSYM files and renaming qml folder
+     echo "Re-sign main app"
+     codesign --force \
+         --options runtime \
+         --entitlements "buildscripts/packaging/macOS/entitlements.plist" \
+-        -s "Developer ID Application: MuseScore" \
++        -s "${SIGN_IDENTITY}" \
+         "${APP_PATH}"
+ 
+     echo "Codesign verify"
+     codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
+ 
+-    echo "spctl"
+-    spctl --assess --type execute -vvv "${APP_PATH}"
+-
+     # Notarize and staple the .app before sealing the DMG
+-    if [ -n "$APPLE_USERNAME" ] && [ -n "$APPLE_PASSWORD" ]; then
++    if [ -n "$NOTARY_KEY" ] || { [ -n "$APPLE_USERNAME" ] && [ -n "$APPLE_PASSWORD" ]; }; then
+         APP_ZIP="applebuild/app-notarization.zip"
+         rm -f "$APP_ZIP"
+         ditto -c -k --keepParent "${APP_PATH}" "$APP_ZIP"
+-        xcrun notarytool submit "$APP_ZIP" \
+-            --apple-id "$APPLE_USERNAME" \
+-            --team-id "$APPLE_TEAM_ID" \
+-            --password "$APPLE_PASSWORD" \
+-            --wait
++        if [ -n "$NOTARY_KEY" ]; then
++            xcrun notarytool submit "$APP_ZIP" \
++                --key "$NOTARY_KEY" \
++                --key-id "$NOTARY_KEY_ID" \
++                --issuer "$NOTARY_ISSUER" \
++                --wait
++        else
++            xcrun notarytool submit "$APP_ZIP" \
++                --apple-id "$APPLE_USERNAME" \
++                --team-id "$APPLE_TEAM_ID" \
++                --password "$APPLE_PASSWORD" \
++                --wait
++        fi
+         xcrun stapler staple "${APP_PATH}"
+         xcrun stapler validate "${APP_PATH}"
+         rm -f "$APP_ZIP"
+     fi
++
++    echo "spctl"
++    spctl --assess --type execute -vvv "${APP_PATH}"
+ else
+     echo "Skipping code signing"
+ fi
+@@ -187,7 +212,7 @@ hdiutil convert "applebuild/${DMG_NAME}" -format UDBZ -o "applebuild/${COMPRESSE
+ if $DO_SIGN; then
+     echo "Codesign DMG"
+     codesign --timestamp \
+-        -s "Developer ID Application: MuseScore" \
++        -s "${SIGN_IDENTITY}" \
+         "applebuild/${COMPRESSED_DMG_NAME}"
+ 
+     codesign --verify --verbose=2 "applebuild/${COMPRESSED_DMG_NAME}"

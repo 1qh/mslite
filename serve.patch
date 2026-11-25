@@ -1,0 +1,75 @@
+diff --git a/src/app/cmdoptions.h b/src/app/cmdoptions.h
+index 87ed9bdd..1f0f9a62 100644
+--- a/src/app/cmdoptions.h
++++ b/src/app/cmdoptions.h
+@@ -12,6 +12,7 @@ namespace mu::app {
+ enum class ConvertType {
+     File,
+     Batch,
++    Serve,
+     ConvertScoreParts,
+     ExportScoreMedia,
+     ExportScoreMeta,
+diff --git a/src/app/internal/commandlineparser.cpp b/src/app/internal/commandlineparser.cpp
+index 57dada0d..0264e3f9 100644
+--- a/src/app/internal/commandlineparser.cpp
++++ b/src/app/internal/commandlineparser.cpp
+@@ -89,6 +89,9 @@ void CommandLineParser::init()
+     m_parser.addOption(QCommandLineOption({ "r", "image-resolution" }, "Set output resolution for image export", "DPI"));
+     m_parser.addOption(QCommandLineOption({ "o", "export-to" }, "Export to 'file'. Format depends on file's extension", "file"));
+     m_parser.addOption(QCommandLineOption({ "j", "job" }, "Process a conversion job", "file"));
++    m_parser.addOption(QCommandLineOption("serve",
++                                          "Stay running and process 1 conversion job per line of standard input: "
++                                          "{\"id\", \"job\", \"extension\", \"style\"}"));
+     m_parser.addOption(QCommandLineOption("extension", "Use extension to process a conversion job", "uri"));
+ 
+     m_parser.addOption(QCommandLineOption({ "F", "factory-settings" }, "Use factory settings"));
+@@ -347,6 +350,11 @@ void CommandLineParser::parse(int argc, char** argv)
+         m_options.converterTask.inputFile = fromUserInputPath(m_parser.value("j"));
+     }
+ 
++    if (m_parser.isSet("serve")) {
++        m_options.runMode = IApplication::RunMode::ConsoleApp;
++        m_options.converterTask.type = ConvertType::Serve;
++    }
++
+     if (m_parser.isSet("score-media")) {
+         m_options.runMode = IApplication::RunMode::ConsoleApp;
+         m_options.converterTask.type = ConvertType::ExportScoreMedia;
+diff --git a/src/app/internal/consoleapp.cpp b/src/app/internal/consoleapp.cpp
+index d6e360d2..21d481d9 100644
+--- a/src/app/internal/consoleapp.cpp
++++ b/src/app/internal/consoleapp.cpp
+@@ -25,6 +25,11 @@
+ #include <QApplication>
+ #ifndef Q_OS_WASM
+ #include <QThreadPool>
++#include <QJsonDocument>
++#include <QJsonObject>
++
++#include <iostream>
++#include <string>
+ #endif
+ 
+ #include "modularity/ioc.h"
+@@ -446,6 +451,20 @@ int ConsoleApp::processConverter(const CmdOptions::ConverterTask& task)
+     case ConvertType::Batch:
+         ret = converter()->batchConvert(task.inputFile, openParams, soundProfile, extensionUri);
+         break;
++    case ConvertType::Serve: {
++        std::string line;
++        while (std::getline(std::cin, line)) {
++            const QJsonObject request = QJsonDocument::fromJson(QByteArray::fromStdString(line)).object();
++            converter::OpenParams params = openParams;
++            if (request.contains("style")) {
++                params.stylePath = request.value("style").toString();
++            }
++            const UriQuery extension(request.value("extension").toString().toStdString());
++            const Ret done = converter()->batchConvert(request.value("job").toString(), params, soundProfile, extension);
++            const std::string id = request.value("id").toString().toStdString();
++            std::cout << id << (done ? " ok" : " failed " + done.toString()) << std::endl;
++        }
++    } break;
+     case ConvertType::File: {
+         std::string transposeOptionsJson = task.params[CmdOptions::ParamKey::ScoreTransposeOptions].toString().toStdString();
+         std::optional<ConvertTarget> target = parseTarget(task.params);
