@@ -107,6 +107,51 @@ index 6c1316eb..64644eaa 100644
      settings()->valueChanged(STARTUP_MODE_TYPE).onReceive(this, [this](const Val&) {
          m_startupModeTypeChanged.notify();
      });
+diff --git a/src/appshell/internal/platform/macos/macosappmenumodelhook.mm b/src/appshell/internal/platform/macos/macosappmenumodelhook.mm
+index 1c39edb7..e54f4f71 100644
+--- a/src/appshell/internal/platform/macos/macosappmenumodelhook.mm
++++ b/src/appshell/internal/platform/macos/macosappmenumodelhook.mm
+@@ -26,8 +26,40 @@
+ 
+ using namespace mu::appshell;
+ 
++//! Give the app a standard Window menu: AppKit fills a menu registered as the windows menu with Minimize, Zoom, Fill,
++//! Center, the tiling commands and the window list, and their shortcuts (such as Fn-Control-F) work through it
++static void ensureWindowsMenu()
++{
++    NSMenu* mainMenu = [NSApp mainMenu];
++    if (!mainMenu || ([NSApp windowsMenu] && [mainMenu indexOfItemWithSubmenu:[NSApp windowsMenu]] >= 0)) {
++        return;
++    }
++
++    NSString* title = NSLocalizedString(@"Window", nil);
++    NSMenuItem* windowItem = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
++    NSMenu* windowMenu = [[NSMenu alloc] initWithTitle:title];
++    [windowItem setSubmenu:windowMenu];
++
++    NSInteger helpIndex = [NSApp helpMenu] ? [mainMenu indexOfItemWithSubmenu:[NSApp helpMenu]] : -1;
++    if (helpIndex < 0) {
++        helpIndex = [mainMenu numberOfItems];
++    }
++    [mainMenu insertItem:windowItem atIndex:helpIndex];
++    [NSApp setWindowsMenu:windowMenu];
++}
++
+ void MacOSAppMenuModelHook::onAppMenuInited()
+ {
+     [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"NSDisabledDictationMenuItem"];
+     [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"NSDisabledCharacterPaletteMenuItem"];
++
++    // Qt builds the native menu bar after this runs and can rebuild it later, so add the menu once it exists and again
++    // whenever the menu bar changes
++    dispatch_async(dispatch_get_main_queue(), ^{
++        ensureWindowsMenu();
++    });
++    [[NSNotificationCenter defaultCenter] addObserverForName:NSMenuDidChangeItemNotification object:nil queue:nil
++                                                  usingBlock:^(NSNotification*) {
++        ensureWindowsMenu();
++    }];
+ }
 diff --git a/src/appshell/internal/startupscenario.cpp b/src/appshell/internal/startupscenario.cpp
 index fad6a767..d04b6fef 100644
 --- a/src/appshell/internal/startupscenario.cpp
