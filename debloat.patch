@@ -242,7 +242,7 @@ index 32d743d8..3e50fe85 100644
  
              currentIndex: 0
 diff --git a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
-index dd4b7cf8..f11e3f66 100644
+index dd4b7cf8..756b0a4f 100644
 --- a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
 +++ b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
 @@ -118,10 +118,13 @@ DockPage {
@@ -335,15 +335,51 @@ index dd4b7cf8..f11e3f66 100644
              title: qsTrc("appshell", "Properties")
  
              navigationSection: root.navigationPanelSec(inspectorPanel.location)
-@@ -460,7 +484,6 @@ DockPage {
+@@ -458,24 +482,40 @@ DockPage {
+             minimumWidth: root.panelMinDimension
+             maximumWidth: root.panelMaxDimension
  
-             groupName: root.horizontalPanelsGroup
+-            groupName: root.horizontalPanelsGroup
++            groupName: "pianoKeyboard"
  
 -            //! NOTE: hidden by default
              visible: false
  
-             location: Location.Bottom
-@@ -609,6 +632,8 @@ DockPage {
+-            location: Location.Bottom
++            location: Location.Top
+ 
+             dropDestinations: root.horizontalPanelDropDestinations
+ 
+             navigationSection: root.navigationPanelSec(pianoKeyboardPanel.location)
+ 
+             PianoKeyboardPanel {
++                id: pianoKeyboardContent
++
+                 navigationSection: pianoKeyboardPanel.navigationSection
+                 contentNavigationPanelOrderStart: pianoKeyboardPanel.contentNavigationPanelOrderStart
+ 
+                 Component.onCompleted: {
+                     pianoKeyboardPanel.contextMenuModel = contextMenuModel
+                 }
++
++                function fitPanel() {
++                    if (fittedHeight > 0) {
++                        pianoKeyboardPanel.resize(pianoKeyboardPanel.width, fittedHeight)
++                    }
++                }
++
++                onFittedHeightChanged: fitPanel()
++
++                Connections {
++                    target: pianoKeyboardPanel
++                    function onPanelShown() {
++                        pianoKeyboardContent.fitPanel()
++                    }
++                }
+             }
+         },
+ 
+@@ -609,6 +649,8 @@ DockPage {
      statusBar: DockStatusBar {
          objectName: root.pageModel.statusBarName()
  
@@ -558,6 +594,88 @@ index 229b9025..3115f37c 100644
  
  target_compile_definitions(liblouis PRIVATE
      TABLESDIR=dataPathPtr           # compileTranslationTable.c
+diff --git a/src/framework/audio/engine/internal/synthesizers/fluidsynth/fluidresolver.cpp b/src/framework/audio/engine/internal/synthesizers/fluidsynth/fluidresolver.cpp
+index 2c3e15a9..60f872e6 100644
+--- a/src/framework/audio/engine/internal/synthesizers/fluidsynth/fluidresolver.cpp
++++ b/src/framework/audio/engine/internal/synthesizers/fluidsynth/fluidresolver.cpp
+@@ -22,6 +22,8 @@
+ 
+ #include "fluidresolver.h"
+ 
++#include <algorithm>
++
+ #include "audio/common/audiosanitizer.h"
+ 
+ #include "audio/engine/internal/codecs/vorbisdecoder.h"
+@@ -58,6 +60,11 @@ ISynthesizerPtr FluidResolver::resolveSynth(const TrackId /*trackId*/, const Aud
+     ONLY_AUDIO_ENGINE_THREAD;
+ 
+     auto search = m_resourcesCache.find(params.resourceMeta.id);
++    if (search == m_resourcesCache.end() && params.resourceMeta.id == configuration()->defaultAudioInputParams().resourceMeta.id) {
++        //! NOTE: MuseScoreLite bundles no soundfont, so what asks for the default font (the metronome above all)
++        //! plays on the first installed soundfont, by name, that carries a drum kit
++        search = m_resourcesCache.find(drumKitSoundFont());
++    }
+     if (search == m_resourcesCache.end()) {
+         LOGE() << "Not found: " << params.resourceMeta.id;
+         return nullptr;
+@@ -71,6 +78,28 @@ ISynthesizerPtr FluidResolver::resolveSynth(const TrackId /*trackId*/, const Aud
+     return synth;
+ }
+ 
++AudioResourceId FluidResolver::drumKitSoundFont() const
++{
++    constexpr int DRUM_KIT_BANK = 128;
++
++    std::vector<const SoundFontMeta*> fonts;
++    for (const auto& pair : soundFontRepository()->soundFonts()) {
++        fonts.push_back(&pair.second);
++    }
++    std::sort(fonts.begin(), fonts.end(), [](const SoundFontMeta* a, const SoundFontMeta* b) { return a->name < b->name; });
++
++    for (const SoundFontMeta* font : fonts) {
++        for (const SoundFontPreset& preset : font->presets) {
++            if (preset.program.bank == DRUM_KIT_BANK) {
++                return font->name;
++            }
++        }
++    }
++
++    LOGE() << "no installed soundfont carries a drum kit, so the metronome is silent";
++    return AudioResourceId();
++}
++
+ bool FluidResolver::hasCompatibleResources(const PlaybackSetupData& /*setup*/) const
+ {
+     return true;
+diff --git a/src/framework/audio/engine/internal/synthesizers/fluidsynth/fluidresolver.h b/src/framework/audio/engine/internal/synthesizers/fluidsynth/fluidresolver.h
+index 25c37cdd..47305b3a 100644
+--- a/src/framework/audio/engine/internal/synthesizers/fluidsynth/fluidresolver.h
++++ b/src/framework/audio/engine/internal/synthesizers/fluidsynth/fluidresolver.h
+@@ -31,6 +31,7 @@
+ #include "global/async/asyncable.h"
+ #include "global/modularity/ioc.h"
+ #include "../../../isoundfontrepository.h"
++#include "../../../iaudioengineconfiguration.h"
+ 
+ #include "fluidsynth.h"
+ 
+@@ -38,6 +39,7 @@ namespace muse::audio::synth {
+ class FluidResolver : public ISynthResolver::IResolver, public muse::Contextable, public async::Asyncable
+ {
+     muse::ContextInject<ISoundFontRepository> soundFontRepository = { this };
++    muse::GlobalInject<engine::IAudioEngineConfiguration> configuration;
+ 
+ public:
+     explicit FluidResolver(const muse::modularity::ContextPtr& iocCtx = nullptr);
+@@ -54,6 +56,7 @@ public:
+     void clearSources() override;
+ 
+ private:
++    AudioResourceId drumKitSoundFont() const;
+     FluidSynthPtr createSynth(const audio::AudioResourceId& resourceId) const;
+ 
+     struct SoundFontResource {
 diff --git a/src/framework/global/internal/globalconfiguration.cpp b/src/framework/global/internal/globalconfiguration.cpp
 index 20440fe7..10872f2d 100644
 --- a/src/framework/global/internal/globalconfiguration.cpp
@@ -785,6 +903,102 @@ index 085b38bf..bebf0d21 100644
              navigationPanel.section: navSec
              navigationPanel.order: 1
          }
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/PianoKeyboardPanel.qml b/src/notationscene/qml/MuseScore/NotationScene/PianoKeyboardPanel.qml
+index 54eeb3b4..884047e0 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/PianoKeyboardPanel.qml
++++ b/src/notationscene/qml/MuseScore/NotationScene/PianoKeyboardPanel.qml
+@@ -30,6 +30,9 @@ Item {
+ 
+     property alias contextMenuModel: contextMenuModel
+ 
++    //! The height that shows the whole keyboard at the panel's width
++    readonly property alias fittedHeight: keyboardView.fittedHeight
++
+     property alias navigationSection: navPanel.section
+     property alias contentNavigationPanelOrderStart: navPanel.order
+ 
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp
+index c3bfa8de..96401e46 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp
++++ b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp
+@@ -115,6 +115,16 @@ void PianoKeyboardView::calculateKeyRects()
+     constexpr qreal defaultSpacing = 2.0;
+     constexpr qreal maxSpacing = 2.0;
+ 
++    //! NOTE: MuseScoreLite fits the whole keyboard to the view's width, and reports the height that shows it whole
++    piano_key_t lastKey = std::min<piano_key_t>(m_lowestKey + m_numberOfKeys, MAX_NUM_KEYS);
++    int whiteKeys = 0;
++    for (piano_key_t key = m_lowestKey; key < lastKey; ++key) {
++        whiteKeys += isBlackKey(key) ? 0 : 1;
++    }
++    if (whiteKeys > 0 && width() > 0) {
++        m_keyWidthScaling = std::max(0.1, (width() - maxSpacing * (whiteKeys + 1)) / (whiteKeys * 30.0));
++    }
++
+     m_spacing = std::min(defaultSpacing * m_keyWidthScaling, maxSpacing);
+ 
+     constexpr qreal defaultWhiteKeyWidth = 30.0;
+@@ -149,6 +159,12 @@ void PianoKeyboardView::calculateKeyRects()
+     }
+ 
+     m_keysAreaRect.setSize(QSizeF(hPos + m_spacing / 2, m_whiteKeyHeight));
++
++    qreal fitted = defaultWhiteKeyHeight * m_keyWidthScaling + m_spacing * 2;
++    if (!qFuzzyCompare(fitted, m_fittedHeight)) {
++        m_fittedHeight = fitted;
++        emit fittedHeightChanged();
++    }
+     adjustKeysAreaPosition();
+ }
+ 
+@@ -362,6 +378,11 @@ void PianoKeyboardView::paintBlackKeys(QPainter* painter, const QRectF& viewport
+     }
+ }
+ 
++qreal PianoKeyboardView::fittedHeight() const
++{
++    return m_fittedHeight;
++}
++
+ int PianoKeyboardView::numberOfKeys() const
+ {
+     return m_numberOfKeys;
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h
+index f1bfd8f8..773c19a6 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h
++++ b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h
+@@ -41,6 +41,7 @@ class PianoKeyboardView : public muse::uicomponents::QuickPaintedView, public mu
+ 
+     Q_PROPERTY(int numberOfKeys READ numberOfKeys WRITE setNumberOfKeys NOTIFY numberOfKeysChanged)
+     Q_PROPERTY(qreal keyWidthScaling READ keyWidthScaling WRITE setScaling NOTIFY keyWidthScalingChanged)
++    Q_PROPERTY(qreal fittedHeight READ fittedHeight NOTIFY fittedHeightChanged)
+ 
+     Q_PROPERTY(qreal scrollBarPosition READ scrollBarPosition WRITE setScrollBarPosition NOTIFY scrollBarChanged)
+     Q_PROPERTY(qreal scrollBarSize READ scrollBarSize NOTIFY scrollBarChanged)
+@@ -56,6 +57,7 @@ public:
+ 
+     void paint(QPainter* painter) override;
+ 
++    qreal fittedHeight() const;
+     int numberOfKeys() const;
+     void setNumberOfKeys(int number);
+ 
+@@ -70,6 +72,7 @@ public:
+ signals:
+     void numberOfKeysChanged();
+     void keyWidthScalingChanged();
++    void fittedHeightChanged();
+ 
+     void scrollBarChanged();
+ 
+@@ -118,6 +121,7 @@ private:
+     std::map<KeyState, QColor> m_blackKeyBottomPieceStateColors;
+ 
+     qreal m_keyWidthScaling = 1.0;
++    qreal m_fittedHeight = 0.0;
+     qreal m_scrollOffset = 0.0;
+     qreal m_spacing = 0.0;
+ 
 diff --git a/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp b/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp
 index 81415642..76f1a913 100644
 --- a/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp
