@@ -1,0 +1,27 @@
+#!/bin/sh
+# Release MuseScoreLite when the head of upstream's current release branch moves, run once a day by schedule.sh.
+# Publishes nothing on any failure, and raises a macOS notification naming the log instead.
+# Needs MSCORE_SECRETS and MSCORE_CHECK_SCORE, as release.sh does.
+HERE=$(cd "$(dirname "$0")" && pwd)
+export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
+LOG="${HOME}/Library/Logs/mslite-release/release.log"
+mkdir -p "$(dirname "${LOG}")"
+LATEST=$(gh api repos/musescore/MuseScore/releases/latest --jq .tag_name) || exit 1
+BRANCH=${MSCORE_BRANCH:-$(echo "${LATEST#v}" | cut -d. -f1-2)}
+HEAD_SHA=$(git ls-remote https://github.com/musescore/MuseScore.git "refs/heads/${BRANCH}" | cut -f1)
+NOTES=$(gh release view "${BRANCH}-muse" --repo "${MSCORE_FORK:-1qh/MuseScore}" --json body --jq .body 2> /dev/null || true)
+case "${NOTES}" in
+  *"@${HEAD_SHA} "*)
+    echo ok
+    exit 0
+    ;;
+  *) ;;
+esac
+if sh "${HERE}/release.sh" > "${LOG}" 2>&1 < /dev/null; then
+  osascript -e "display notification \"Released ${BRANCH} at ${HEAD_SHA}\" with title \"MuseScoreLite\"" > /dev/null 2>&1
+  echo ok
+  exit 0
+fi
+osascript -e "display notification \"Release failed, see ${LOG}\" with title \"MuseScoreLite\"" > /dev/null 2>&1
+tail -20 "${LOG}" >&2
+exit 1

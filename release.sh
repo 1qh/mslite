@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build upstream MuseScore's newest release with every patch, for Apple Silicon, sign, notarize, and publish it.
+# Build the head of upstream MuseScore's current release branch with every patch, for Apple Silicon, sign, notarize, and publish it.
 # Needs the Developer ID Application identity in the keychain, and MSCORE_SECRETS naming the folder that holds
 # asc-api.p8, asc-api-key-id.txt and asc-api-issuer-id.txt (an App Store Connect API key, for notarization).
 # MSCORE_BUILD_ONLY=1 stops after the compile (the compile Mac); MSCORE_PACKAGE_ONLY=1 skips it and, with
@@ -11,20 +11,28 @@ SRC=${MSCORE_RELEASE_SRC:-${HERE}/../mscore-release}
 DEPS=${MSCORE_DEPS:-${HERE}/../mscore-deps}
 QT=${MSCORE_QT:-${HERE}/../mscore-qt}
 PATCHES="serve piano-playback packaging flat-picker debloat"
-TAG=${MSCORE_TAG:-$(gh api repos/musescore/MuseScore/releases/latest --jq .tag_name)}
+UPSTREAM=https://github.com/musescore/MuseScore.git
+LATEST=$(gh api repos/musescore/MuseScore/releases/latest --jq .tag_name)
+BRANCH=${MSCORE_BRANCH:-$(echo "${LATEST#v}" | cut -d. -f1-2)}
+HEAD_SHA=$(git ls-remote "${UPSTREAM}" "refs/heads/${BRANCH}" | cut -f1)
+[ -n "${HEAD_SHA}" ] || {
+  echo "upstream has no branch ${BRANCH}" >&2
+  exit 1
+}
+SHORT=$(echo "${HEAD_SHA}" | cut -c1-8)
 COMMITS=$(($(echo "${PATCHES}" | wc -w) + 1))
 STALE=0
 for patch in ${PATCHES}; do cmp -s "${HERE}/${patch}.patch" "${SRC}/patches/${patch}.patch" || STALE=1; done
-DESCRIBED=$(git -C "${SRC}" describe --tags --exact-match "HEAD~${COMMITS}" 2> /dev/null || true)
+BASE=$(git -C "${SRC}" rev-parse "HEAD~${COMMITS}" 2> /dev/null || true)
 SUBJECT=$(git -C "${SRC}" log --format=%s -1 2> /dev/null || true)
-if [ "${DESCRIBED}" != "${TAG}" ] || [ "${SUBJECT}" != "muse: patch set and release script" ] || [ "${STALE}" = 1 ]; then
+if [ "${BASE}" != "${HEAD_SHA}" ] || [ "${SUBJECT}" != "muse: patch set and release script" ] || [ "${STALE}" = 1 ]; then
   rm -rf "${SRC}"
-  git clone -q --depth 1 --branch "${TAG}" https://github.com/musescore/MuseScore.git "${SRC}"
+  git clone -q --depth 1 --branch "${BRANCH}" "${UPSTREAM}" "${SRC}"
   cd "${SRC}"
-  git checkout -q -b "release/${TAG}"
+  git checkout -q -b "release/${BRANCH}"
   for patch in ${PATCHES}; do
     git apply --check "${HERE}/${patch}.patch" || {
-      echo "patch ${patch} does not apply to ${TAG}" >&2
+      echo "patch ${patch} does not apply to ${BRANCH} at ${SHORT}" >&2
       exit 1
     }
     git apply "${HERE}/${patch}.patch"
@@ -106,7 +114,7 @@ sh "${HERE}/export-check.sh" "${BINARY}" "${MSCORE_CHECK_SCORE}"
 
 KEY_ID=$(cat "${MSCORE_SECRETS}/asc-api-key-id.txt")
 ISSUER=$(cat "${MSCORE_SECRETS}/asc-api-issuer-id.txt")
-VERSION=${TAG#v}
+VERSION=$(for part in MAJOR MINOR PATCH; do sed -n "s/^set(MUSE_APP_VERSION_${part} \"\\([0-9]*\\)\")$/\\1/p" version.cmake; done | paste -sd. -)-${SHORT}
 SIGN_IDENTITY="${IDENTITY}" NOTARY_KEY="${MSCORE_SECRETS}/asc-api.p8" \
   NOTARY_KEY_ID="${KEY_ID}" NOTARY_ISSUER="${ISSUER}" \
   bash buildscripts/packaging/macOS/package.sh --app-name "MuseScoreLite" --vol-name "MuseScoreLite-${VERSION}" --sign < /dev/null
@@ -124,12 +132,12 @@ sh "${HERE}/export-check.sh" "${PWD}/applebuild/mscore.app/Contents/MacOS/mscore
   exit 0
 }
 
-git push -q --force "https://github.com/${FORK}.git" "release/${TAG}"
-NOTES="Upstream ${TAG} with: --serve (1 conversion job per stdin line, stays running, no Dock icon), the keyboard panel lighting the notes sounding during playback (upstream PR 34351) and shown only while the score plays, the flat SoundFont picker (every preset in 1 menu under a header per font), and a lean, fully offline reading app: the sheet alone on a filled screen under a merged title bar, no home page or tabs, a standard Window menu, no internet access at all, no welcome, tours, account, cloud, online publishing, update check, online help, Muse Sounds, translations or bundled soundfont (add your own .sf2/.sf3), English only, High-contrast Black theme, data in ~/mslite. Apple Silicon only, signed and notarized."
-if gh release view "${TAG}-muse" --repo "${FORK}" >/dev/null 2>&1; then
-  gh release upload "${TAG}-muse" "${DMG}" --repo "${FORK}" --clobber
-  gh release edit "${TAG}-muse" --repo "${FORK}" --title "MuseScoreLite ${VERSION}" --notes "${NOTES}" >/dev/null
+git push -q --force "https://github.com/${FORK}.git" "release/${BRANCH}"
+NOTES="Upstream ${BRANCH} at musescore/MuseScore@${HEAD_SHA} with: --serve (1 conversion job per stdin line, stays running, no Dock icon), the keyboard panel lighting the notes sounding during playback (upstream PR 34351) and shown only while the score plays, the flat SoundFont picker (every preset in 1 menu under a header per font), and a lean, fully offline reading app: the sheet alone on a filled screen under a merged title bar, no home page or tabs, a standard Window menu, no internet access at all, no welcome, tours, account, cloud, online publishing, update check, online help, Muse Sounds, translations or bundled soundfont (add your own .sf2/.sf3), English only, High-contrast Black theme, data in ~/mslite. Apple Silicon only, signed and notarized."
+if gh release view "${BRANCH}-muse" --repo "${FORK}" > /dev/null 2>&1; then
+  gh release upload "${BRANCH}-muse" "${DMG}" --repo "${FORK}" --clobber
+  gh release edit "${BRANCH}-muse" --repo "${FORK}" --title "MuseScoreLite ${VERSION}" --notes "${NOTES}" > /dev/null
 else
-  gh release create "${TAG}-muse" "${DMG}" --repo "${FORK}" --target "release/${TAG}" --title "MuseScoreLite ${VERSION}" --notes "${NOTES}"
+  gh release create "${BRANCH}-muse" "${DMG}" --repo "${FORK}" --target "release/${BRANCH}" --latest --title "MuseScoreLite ${VERSION}" --notes "${NOTES}"
 fi
-echo "released ${TAG}-muse"
+echo "released ${BRANCH}-muse at ${SHORT}"
