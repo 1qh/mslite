@@ -63,6 +63,12 @@ if [ "${MSCORE_PACKAGE_ONLY:-}" != 1 ]; then
   MUSESCORE_CMAKE_ARGS="${LEAN}" CMAKE_OSX_ARCHITECTURES=arm64 MUSE_APP_BUILD_MODE=release MUSESCORE_INSTALL_DIR=../applebuild \
     MUSESCORE_MACOS_DEPS_PATH="${DEPS}" MUSESCORE_DOWNLOAD_SOUNDFONT=OFF MUSESCORE_MODULE_UPDATE=OFF \
     bash -e ./ninja_build.sh -t install < /dev/null
+  # A module that is on with its own QML off builds cleanly and opens no window: refuse it here
+  MISSING_QML=$(awk -F'[:=]' '/^MUE_BUILD_[A-Z_]+_MODULE:BOOL=ON$/ {sub(/_MODULE$/, "", $1); on[$1] = 1} /^MUE_BUILD_[A-Z_]+_QML:BOOL=OFF$/ {sub(/_QML$/, "", $1); off[$1] = 1} END {for (m in on) if (m in off) print m}' build.release/CMakeCache.txt)
+  if [ -n "${MISSING_QML}" ]; then
+    echo "modules on with their QML off: ${MISSING_QML}" >&2
+    exit 1
+  fi
 fi
 [ -x applebuild/mscore.app/Contents/MacOS/mscore ] || {
   echo "build produced no app" >&2
