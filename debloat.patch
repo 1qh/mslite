@@ -86,7 +86,7 @@ index 5fa71b22..04d6a25c 100644
      "link_color": "#FFFFFF",
      "focus_color": "#75507b",
 diff --git a/src/appshell/internal/appshellconfiguration.cpp b/src/appshell/internal/appshellconfiguration.cpp
-index 6c1316eb..dae51ed9 100644
+index 6c1316eb..64644eaa 100644
 --- a/src/appshell/internal/appshellconfiguration.cpp
 +++ b/src/appshell/internal/appshellconfiguration.cpp
 @@ -73,7 +73,7 @@ void AppShellConfiguration::init()
@@ -98,11 +98,43 @@ index 6c1316eb..dae51ed9 100644
      settings()->valueChanged(WELCOME_DIALOG_SHOW_ON_STARTUP_KEY).onReceive(this, [this](const Val&) {
          m_welcomeDialogShowOnStartupChanged.notify();
      });
+@@ -81,7 +81,7 @@ void AppShellConfiguration::init()
+     settings()->setDefaultValue(WELCOME_DIALOG_LAST_SHOWN_VERSION_KEY, Val("0.0.0"));
+     settings()->setDefaultValue(WELCOME_DIALOG_LAST_SHOWN_INDEX, Val(-1));
+ 
+-    settings()->setDefaultValue(STARTUP_MODE_TYPE, Val(StartupModeType::StartEmpty));
++    settings()->setDefaultValue(STARTUP_MODE_TYPE, Val(StartupModeType::ContinueLastSession));
+     settings()->valueChanged(STARTUP_MODE_TYPE).onReceive(this, [this](const Val&) {
+         m_startupModeTypeChanged.notify();
+     });
 diff --git a/src/appshell/internal/startupscenario.cpp b/src/appshell/internal/startupscenario.cpp
-index fad6a767..9d7c8394 100644
+index fad6a767..d04b6fef 100644
 --- a/src/appshell/internal/startupscenario.cpp
 +++ b/src/appshell/internal/startupscenario.cpp
-@@ -253,6 +253,9 @@ void StartupScenario::showStartupDialogsIfNeed(StartupModeType modeType)
+@@ -59,19 +59,10 @@ static StartupModeType modeTypeTromString(const std::string& str)
+     return StartupModeType::StartEmpty;
+ }
+ 
+-static const Uri& startupPageUri(StartupModeType modeType)
++static const Uri& startupPageUri([[maybe_unused]] StartupModeType modeType)
+ {
+-    switch (modeType) {
+-    case StartupModeType::StartEmpty:
+-    case StartupModeType::StartWithNewScore:
+-    case StartupModeType::Recovery:
+-        return HOME_URI;
+-    case StartupModeType::StartWithScore:
+-    case StartupModeType::ContinueLastSession:
+-        return NOTATION_URI;
+-    }
+-
+-    return HOME_URI;
++    // The app has no home page: every start lands on the score page
++    return NOTATION_URI;
+ }
+ 
+ void StartupScenario::setStartupType(const std::optional<std::string>& type)
+@@ -253,6 +244,9 @@ void StartupScenario::showStartupDialogsIfNeed(StartupModeType modeType)
      //! to show a MuseSounds update dialog (see ProjectActionsController::doFinishOpenProject). MuseSampler's update
      //! dialog should be shown after the welcome dialog.
      const auto showWelcomeDialogAndSamplerUpdateIfNeed = [this, modeType]() {
@@ -136,30 +168,6 @@ index 32d743d8..3e50fe85 100644
              ]
  
              currentIndex: 0
-diff --git a/src/appshell/qml/MuseScore/AppShell/MainToolBar.qml b/src/appshell/qml/MuseScore/AppShell/MainToolBar.qml
-index 1fb246b2..35427af9 100644
---- a/src/appshell/qml/MuseScore/AppShell/MainToolBar.qml
-+++ b/src/appshell/qml/MuseScore/AppShell/MainToolBar.qml
-@@ -32,7 +32,10 @@ import MuseScore.AppShell
- Item {
-     id: root
- 
--    width: radioButtonList.width
-+    // On macOS the window buttons sit over the app's top-left corner, so the tabs start past them
-+    readonly property int windowButtonsInset: Qt.platform.os === "osx" ? 76 : 0
-+
-+    width: radioButtonList.width + windowButtonsInset
-     height: radioButtonList.height
- 
-     property alias navigation: navPanel
-@@ -69,6 +72,7 @@ Item {
- 
-     RadioButtonGroup {
-         id: radioButtonList
-+        x: root.windowButtonsInset
-         spacing: 0
- 
-         model: toolBarModel
 diff --git a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
 index dd4b7cf8..f11e3f66 100644
 --- a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
@@ -284,15 +292,15 @@ index 4b893445..9f825047 100644
              Layout.alignment: Qt.AlignVCenter
              Layout.preferredHeight: 28
 diff --git a/src/appshell/qml/MuseScore/AppShell/WindowContent.qml b/src/appshell/qml/MuseScore/AppShell/WindowContent.qml
-index 806fdc3f..2c8bda1c 100644
+index 806fdc3f..66800d91 100644
 --- a/src/appshell/qml/MuseScore/AppShell/WindowContent.qml
 +++ b/src/appshell/qml/MuseScore/AppShell/WindowContent.qml
 @@ -67,6 +67,9 @@ DockWindow {
              objectName: "mainToolBar"
              title: qsTrc("appshell", "Main toolbar")
  
-+            // The score page shows the sheet alone; the other pages keep their tabs
-+            visible: root.currentPageUri !== "musescore://notation"
++            // The app has no home page and no tabs: the score page is the whole window
++            visible: false
 +
              floatable: false
              closable: false
@@ -666,6 +674,36 @@ index b0ad77d1..dd3ae427 100644
      };
  
      for (PreferencePageItem* item: items) {
+diff --git a/src/project/internal/projectactionscontroller.cpp b/src/project/internal/projectactionscontroller.cpp
+index 4eb13888..0795d059 100644
+--- a/src/project/internal/projectactionscontroller.cpp
++++ b/src/project/internal/projectactionscontroller.cpp
+@@ -51,7 +51,6 @@ using namespace muse::actions;
+ 
+ static const muse::Uri NOTATION_PAGE_URI("musescore://notation");
+ static const muse::Uri NOTATION_REVIEW_PAGE_URI("musescore://notation/review");
+-static const muse::Uri HOME_PAGE_URI("musescore://home");
+ static const muse::Uri NEW_SCORE_URI("musescore://project/newscore");
+ static const muse::Uri PROJECT_PROPERTIES_URI("musescore://project/properties");
+ static const muse::Uri UPLOAD_PROGRESS_URI("musescore://project/upload/progress");
+@@ -758,7 +757,7 @@ bool ProjectActionsController::closeOpenedProject(bool goToHome)
+         globalContext()->setCurrentProject(nullptr);
+ 
+         if (goToHome) {
+-            Ret ret = openPageIfNeed(HOME_PAGE_URI);
++            Ret ret = openPageIfNeed(NOTATION_PAGE_URI);
+             if (!ret) {
+                 LOGE() << ret.toString();
+             }
+@@ -1888,7 +1887,7 @@ void ProjectActionsController::continueLastSession()
+     const RecentFilesList& recentScorePaths = recentFilesController()->recentFilesList();
+ 
+     if (recentScorePaths.empty()) {
+-        Ret ret = openPageIfNeed(HOME_PAGE_URI);
++        Ret ret = openPageIfNeed(NOTATION_PAGE_URI);
+         if (!ret) {
+             LOGE() << ret.toString();
+         }
 diff --git a/src/project/internal/projectconfiguration.cpp b/src/project/internal/projectconfiguration.cpp
 index 5e99a504..bc20c65f 100644
 --- a/src/project/internal/projectconfiguration.cpp
