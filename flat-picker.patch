@@ -67,6 +67,55 @@ index 05adfae1..8740ba12 100644
          if (!title.contains(m_filterText, Qt::CaseInsensitive)) {
              continue;
          }
+diff --git a/src/framework/uicomponents/qml/Muse/UiComponents/internal/MenuMetrics.qml b/src/framework/uicomponents/qml/Muse/UiComponents/internal/MenuMetrics.qml
+index 52840b6d..f2dd19e8 100644
+--- a/src/framework/uicomponents/qml/Muse/UiComponents/internal/MenuMetrics.qml
++++ b/src/framework/uicomponents/qml/Muse/UiComponents/internal/MenuMetrics.qml
+@@ -20,6 +20,7 @@
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+ import QtQml 2.15
++import QtQuick
+ 
+ import Muse.Ui
+ import Muse.UiComponents
+@@ -88,16 +89,35 @@ QtObject {
+         let leftWidth = 0
+         let rightWidth = 0
+ 
++        let headerWidth = 0
++
+         for (let j = 0; j < model.length; j++) {
+-            testItem.modelData = Boolean(model.get) ? model.get(j).item : model[j]
++            let entry = Boolean(model.get) ? model.get(j).item : model[j]
++
++            // A section header is drawn in the title font, so its full title sets a width of its own
++            if (Boolean(entry) && entry.isSectionHeader) {
++                headerMetrics.text = entry.title
++                headerWidth = Math.max(headerWidth, Math.ceil(headerMetrics.advanceWidth) + root.sectionHeaderPadding)
++                continue
++            }
++
++            testItem.modelData = entry
+             leftWidth = Math.max(leftWidth, testItem.calculatedLeftPartWidth())
+             rightWidth = Math.max(rightWidth, testItem.calculatedRightPartWidth())
+         }
+ 
++        leftWidth = Math.max(leftWidth, headerWidth - rightWidth)
++
+         root.itemLeftPartWidth = leftWidth
+         root.itemRightPartWidth = rightWidth
+     }
+ 
++    readonly property int sectionHeaderPadding: 24
++
++    property TextMetrics headerMetrics: TextMetrics {
++        font: ui.theme.titleBoldFont
++    }
++
+     property StyledMenuItem testItem: StyledMenuItem {
+         iconAndCheckMarkMode: root.iconAndCheckMarkMode
+         wideIcon: root.hasItemsWithWideIcon
 diff --git a/src/framework/uicomponents/qml/Muse/UiComponents/internal/StyledMenu.qml b/src/framework/uicomponents/qml/Muse/UiComponents/internal/StyledMenu.qml
 index 480a6653..4e7b566e 100644
 --- a/src/framework/uicomponents/qml/Muse/UiComponents/internal/StyledMenu.qml
