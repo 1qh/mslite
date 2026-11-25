@@ -68,6 +68,8 @@ if [ -n "${MSCORE_APP_FROM:-}" ]; then
   rsync -a --delete "${MSCORE_APP_FROM}/" applebuild/mscore.app/ < /dev/null
 fi
 if [ "${MSCORE_PACKAGE_ONLY:-}" != 1 ]; then
+  # packaging rewrites the bundle in place (it renames qml, prunes Qt, signs), so every install starts from none
+  rm -rf applebuild/mscore.app
   MUSESCORE_CMAKE_ARGS="${LEAN}" CMAKE_OSX_ARCHITECTURES=arm64 MUSE_APP_BUILD_MODE=release MUSESCORE_INSTALL_DIR=../applebuild \
     MUSESCORE_MACOS_DEPS_PATH="${DEPS}" MUSESCORE_DOWNLOAD_SOUNDFONT=OFF MUSESCORE_MODULE_UPDATE=OFF \
     bash -e ./ninja_build.sh -t install < /dev/null
