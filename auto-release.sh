@@ -2,7 +2,17 @@
 # Release MuseScoreLite when the head of upstream's current release branch moves, run once a day by schedule.sh.
 # Publishes nothing on any failure, and raises a macOS notification naming the log instead.
 # Needs MSCORE_SECRETS and MSCORE_CHECK_SCORE, as release.sh does.
-HERE=$(cd "$(dirname "$0")" && pwd)
+# a shell reads its script as it runs, so a pull or an edit mid-run would splice the run: run from a private copy
+if [ -z "${MSLITE_SCRIPT_HOME:-}" ]; then
+  MSLITE_SCRIPT_HOME=$(cd "$(dirname "$0")" && pwd)
+  export MSLITE_SCRIPT_HOME
+  copy=$(mktemp)
+  cp "$0" "${copy}"
+  exec sh "${copy}" "$@"
+fi
+trap 'rm -f "$0"' EXIT
+HERE=${MSLITE_SCRIPT_HOME}
+unset MSLITE_SCRIPT_HOME
 export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
 LOG="${HOME}/Library/Logs/mslite-release/release.log"
 mkdir -p "$(dirname "${LOG}")"

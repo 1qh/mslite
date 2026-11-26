@@ -5,7 +5,17 @@
 # MSCORE_BUILD_ONLY=1 stops after the compile (the compile Mac); MSCORE_PACKAGE_ONLY=1 skips it; MSCORE_APP_FROM, naming
 # an rsync source such as host:path/mscore.app, packages the app built there and implies MSCORE_PACKAGE_ONLY.
 set -e
-HERE=$(cd "$(dirname "$0")" && pwd)
+# a shell reads its script as it runs, so a pull or an edit mid-run would splice the run: run from a private copy
+if [ -z "${MSLITE_SCRIPT_HOME:-}" ]; then
+  MSLITE_SCRIPT_HOME=$(cd "$(dirname "$0")" && pwd)
+  export MSLITE_SCRIPT_HOME
+  copy=$(mktemp)
+  cp "$0" "${copy}"
+  exec sh "${copy}" "$@"
+fi
+trap 'rm -f "$0"' EXIT
+HERE=${MSLITE_SCRIPT_HOME}
+unset MSLITE_SCRIPT_HOME
 FORK=${MSCORE_FORK:-1qh/MuseScore}
 SRC=${MSCORE_RELEASE_SRC:-${HERE}/../mscore-release}
 DEPS=${MSCORE_DEPS:-${HERE}/../mscore-deps}
