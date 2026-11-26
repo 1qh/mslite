@@ -37432,7 +37432,7 @@ index e043f701..6dd681b8 100644
      spacing: 8
  
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.cpp b/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.cpp
-index 5a19030e..479b87ae 100644
+index 5a19030e..d1ed559c 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.cpp
 +++ b/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.cpp
 @@ -21,6 +21,15 @@
@@ -37561,7 +37561,7 @@ index 5a19030e..479b87ae 100644
  ViewMode NotationNavigator::notationViewMode() const
  {
      if (!notation()) {
-@@ -268,11 +332,59 @@ void NotationNavigator::paint(QPainter* painter)
+@@ -268,11 +332,61 @@ void NotationNavigator::paint(QPainter* painter)
  
      TRACEFUNC;
  
@@ -37571,7 +37571,9 @@ index 5a19030e..479b87ae 100644
 +            return;
 +        }
 +        painter->fillRect(boundingRect(), configuration()->backgroundColor());
-+        const QTransform fittedMatrix = matrix().value<QTransform>();
++        //! NOTE As in the base paint, the matrix is in GUI-scaled units, so painting multiplies the GUI scaling back in
++        const qreal guiScaling = configuration()->guiScaling();
++        const QTransform fittedMatrix = matrix().value<QTransform>() * QTransform::fromScale(guiScaling, guiScaling);
 +        muse::draw::Painter scorePainter(painter, objectName().toStdString());
 +        scorePainter.setWorldTransform(muse::draw::Transform::fromQTransform(fittedMatrix));
 +        notation()->painting()->paintView(&scorePainter, viewport(), true);
