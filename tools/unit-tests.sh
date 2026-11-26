@@ -2,7 +2,8 @@
 # Build and run the unit tests of the modules the patches change, in a build folder of their own beside the release
 # build, with the release's own module options, so the tests judge the code that ships.
 # usage: unit-tests.sh <source tree> <test build folder> <Qt folder> <deps folder>
-# UNIT_TEST_TARGETS names other test targets than the default set.
+# UNIT_TEST_TARGETS names other test targets than the default set. The notation module has no test target of its own;
+# its interfaces are compiled through the notation scene tests' mocks.
 # Prints 1 line per test binary with its verdict and exits non-zero when any fails to build or run.
 set -eu
 [ "$#" -eq 4 ] || {
@@ -19,7 +20,7 @@ LEAN=$(sed -n 's/^LEAN="\(.*\)"$/\1/p' "${HERE}/release.sh")
   echo "no LEAN options found in release.sh" >&2
   exit 1
 }
-TARGETS=${UNIT_TEST_TARGETS:-playback_test notationscene_qml_tests notation_tests engraving_tests project_test project_qml_tests}
+TARGETS=${UNIT_TEST_TARGETS:-playback_test notationscene_qml_tests engraving_tests project_test project_qml_tests}
 export CMAKE_PREFIX_PATH="${QT}" PATH="${QT}/bin:${PATH}"
 # LEAN is a list of options: xargs splits it into cmake's arguments
 printf '%s\n' "${LEAN}" | xargs cmake -S "${SRC}" -B "${OUT}" -G Ninja -DCMAKE_BUILD_TYPE=Release \
