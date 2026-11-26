@@ -5816,19 +5816,22 @@ index fb1f835b..00000000
 -    }
 -}
 diff --git a/src/appshell/qml/MuseScore/AppShell/WindowContent.qml b/src/appshell/qml/MuseScore/AppShell/WindowContent.qml
-index 806fdc3f..6dead5d1 100644
+index 806fdc3f..84417c32 100644
 --- a/src/appshell/qml/MuseScore/AppShell/WindowContent.qml
 +++ b/src/appshell/qml/MuseScore/AppShell/WindowContent.qml
-@@ -31,8 +31,6 @@ import MuseScore.AppShell
+@@ -29,11 +29,7 @@ import Muse.UiComponents
+ import Muse.Dock
+ import MuseScore.AppShell
  
- import "./HomePage"
+-import "./HomePage"
  import "./NotationPage"
 -import "./NotationReviewPage"
 -import "./PublishPage"
- import "./DevTools"
+-import "./DevTools"
  
  DockWindow {
-@@ -67,6 +65,9 @@ DockWindow {
+     id: root
+@@ -67,6 +63,9 @@ DockWindow {
              objectName: "mainToolBar"
              title: qsTrc("appshell", "Main toolbar")
  
@@ -5838,7 +5841,7 @@ index 806fdc3f..6dead5d1 100644
              floatable: false
              closable: false
  
-@@ -97,22 +98,8 @@ DockWindow {
+@@ -97,22 +96,8 @@ DockWindow {
      ]
  
      pages: [
