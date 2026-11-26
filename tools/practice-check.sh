@@ -49,7 +49,8 @@ awk -v v="${song}" 'BEGIN { exit !(v != "" && v > -60) }' || {
   exit 1
 }
 ffmpeg -v error -t 3 -i "${VIDEO}" -vn -ac 1 -ar 8000 -f s16le "${OUT}/count-in.raw"
-od -An -v -td2 -w2 "${OUT}/count-in.raw" > "${OUT}/count-in.txt"
+od -An -v -td2 "${OUT}/count-in.raw" > "${OUT}/count-in.words"
+tr -s ' ' '\n' < "${OUT}/count-in.words" | sed '/^$/d' > "${OUT}/count-in.txt"
 clicks=$(awk '{ v = $1 < 0 ? -$1 : $1; w = int((NR - 1) / 400); if (v > m[w]) m[w] = v } END { for (i in m) if (m[i] > 2000) n++; print n + 0 }' "${OUT}/count-in.txt")
 [ "${clicks}" -ge 2 ] || {
   echo "the count-in has no clicks: ${clicks} loud 50 ms windows in its first 3 s" >&2
