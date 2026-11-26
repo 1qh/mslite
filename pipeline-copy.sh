@@ -10,6 +10,8 @@ ID=${3:-org.musescore.MuseScoreLite.pipeline}
 rm -rf "${TO}.new"
 ditto "${FROM}" "${TO}.new"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${ID}" "${TO}.new/Contents/Info.plist"
+# the copy is a local derivative signed ad hoc, so a quarantine it inherits would make Gatekeeper refuse to open it
+xattr -dr com.apple.quarantine "${TO}.new"
 codesign --force --deep --sign - "${TO}.new" 2> /dev/null
 GOT=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${TO}.new/Contents/Info.plist")
 [ "${GOT}" = "${ID}" ] || {

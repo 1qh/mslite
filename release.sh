@@ -114,6 +114,11 @@ if [ "${MSCORE_PACKAGE_ONLY:-}" != 1 ]; then
     }
   fi
 fi
+# a built app carries the release's own bundle identifier, and macOS hands a double-clicked score to any registered copy,
+# so every copy this script leaves in the build tree is taken out of Launch Services
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+unregister() { "${LSREGISTER}" -u "$1" > /dev/null 2>&1 || true; }
+trap 'unregister "${PWD}/applebuild/mscore.app"; unregister "${PWD}/applebuild/test/mscore.app"; rm -f "$0"' EXIT
 [ -x applebuild/mscore.app/Contents/MacOS/mscore ] || {
   echo "build produced no app" >&2
   exit 1
