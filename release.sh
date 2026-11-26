@@ -2,8 +2,8 @@
 # Build the head of upstream MuseScore's current release branch with every patch, for Apple Silicon, sign, notarize, and publish it.
 # Needs the Developer ID Application identity in the keychain, and MSCORE_SECRETS naming the folder that holds
 # asc-api.p8, asc-api-key-id.txt and asc-api-issuer-id.txt (an App Store Connect API key, for notarization).
-# MSCORE_BUILD_ONLY=1 stops after the compile (the compile Mac); MSCORE_PACKAGE_ONLY=1 skips it and, with
-# MSCORE_APP_FROM naming an rsync source such as host:path/mscore.app, packages the app built there.
+# MSCORE_BUILD_ONLY=1 stops after the compile (the compile Mac); MSCORE_PACKAGE_ONLY=1 skips it; MSCORE_APP_FROM, naming
+# an rsync source such as host:path/mscore.app, packages the app built there and implies MSCORE_PACKAGE_ONLY.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 FORK=${MSCORE_FORK:-1qh/MuseScore}
@@ -64,6 +64,12 @@ fi
 export CMAKE_PREFIX_PATH="${QT}" PATH="${QT}/bin:${PATH}"
 LEAN="-DMUE_BUILD_MACOS_INTEGRATION=OFF -DMUSE_MODULE_LANGUAGES=OFF -DMUSE_MODULE_MUSESAMPLER=OFF -DMUE_BUILD_BRAILLE_MODULE=OFF -DMUE_BUILD_BRAILLE_QML=OFF -DMUE_BUILD_MUSESOUNDS_MODULE=OFF -DMUE_BUILD_MUSESOUNDS_QML=OFF -DMUSE_MODULE_CLOUD=OFF -DMUSE_MODULE_CLOUD_MUSESCORECOM=OFF -DMUSE_MODULE_LEARN=OFF -DMUSE_MODULE_TOURS=OFF -DMUSE_MODULE_NETWORK=OFF -DMUSE_MODULE_UPDATE=OFF -DMUSE_MODULE_AUTOBOT=OFF -DMUSE_MODULE_VST=OFF -DMUSE_MODULE_AUDIOPLUGINS=OFF -DMUE_BUILD_IMPEXP_GUITARPRO_MODULE=OFF -DMUE_BUILD_IMPEXP_MEI_MODULE=OFF -DMUE_BUILD_IMPEXP_MNX_MODULE=OFF -DMUE_BUILD_IMPEXP_BB_MODULE=OFF -DMUE_BUILD_IMPEXP_BWW_MODULE=OFF -DMUE_BUILD_IMPEXP_CAPELLA_MODULE=OFF -DMUE_BUILD_IMPEXP_OVE_MODULE=OFF -DMUE_BUILD_IMPEXP_MUSEDATA_MODULE=OFF -DMUE_BUILD_IMPEXP_TABLEDIT_MODULE=OFF -DMUE_BUILD_IMPEXP_LYRICS_MODULE=OFF -DMUE_BUILD_IMPEXP_MIDI_MODULE=ON -DMUE_BUILD_IMPEXP_VIDEOEXPORT_MODULE=OFF -DMUE_BUILD_IMPEXP_AUDIOEXPORT_MODULE=OFF"
 if [ -n "${MSCORE_APP_FROM:-}" ]; then
+  # an app built elsewhere is packaged as it is; compiling here would delete it
+  [ "${MSCORE_BUILD_ONLY:-}" = 1 ] && {
+    echo "MSCORE_APP_FROM packages an app built elsewhere; it cannot be combined with MSCORE_BUILD_ONLY" >&2
+    exit 1
+  }
+  MSCORE_PACKAGE_ONLY=1
   mkdir -p applebuild/mscore.app
   rsync -a --delete "${MSCORE_APP_FROM}/" applebuild/mscore.app/ < /dev/null
 fi
