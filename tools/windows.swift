@@ -14,5 +14,6 @@ for window in listed where (window[kCGWindowOwnerPID as String] as? Int) == pid 
   let layer = window[kCGWindowLayer as String] as? Int ?? 0
   let onscreen = window[kCGWindowIsOnscreen as String] as? Bool ?? false
   let alpha = window[kCGWindowAlpha as String] as? Double ?? 0
-  print("layer \(layer) \(bounds["Width"] ?? 0)x\(bounds["Height"] ?? 0) onscreen=\(onscreen) alpha=\(alpha) \(title)")
+  let number = window[kCGWindowNumber as String] as? Int ?? 0
+  print("layer \(layer) \(bounds["Width"] ?? 0)x\(bounds["Height"] ?? 0) onscreen=\(onscreen) alpha=\(alpha) id=\(number) \(title)")
 }
