@@ -35565,7 +35565,7 @@ index 7bd4804a..eeedcf18 100644
      bool shouldWarnBeforeSavingDiagnosticFiles() const override;
      void setShouldWarnBeforeSavingDiagnosticFiles(bool val) override;
 diff --git a/src/framework/dockwindow/internal/dockbase.cpp b/src/framework/dockwindow/internal/dockbase.cpp
-index 87246785..c029df0d 100644
+index 87246785..744acbde 100644
 --- a/src/framework/dockwindow/internal/dockbase.cpp
 +++ b/src/framework/dockwindow/internal/dockbase.cpp
 @@ -23,8 +23,10 @@
@@ -35682,7 +35682,7 @@ index 87246785..c029df0d 100644
  }
  
  void DockBase::close()
-@@ -575,6 +645,28 @@ void DockBase::resize(int width, int height)
+@@ -575,6 +645,21 @@ void DockBase::resize(int width, int height)
      width = qBound(m_minimumWidth, width, m_maximumWidth);
      height = qBound(m_minimumHeight, height, m_maximumHeight);
  
@@ -35701,28 +35701,10 @@ index 87246785..c029df0d 100644
 +        }
 +    }
 +
-+    //! NOTE The layout constraints below only ever grow a floating window to its content, never shrink it, so a floating
-+    //! window holding this dock alone is resized by the same change as its content
-+    const QSize contentChange(width - qCeil(this->width()), height - qCeil(this->height()));
-+    auto* soleFloatingWindow = m_dockWidget->floatingWindow() && m_dockWidget->floatingWindow()->hasSingleDockWidget()
-+                               ? m_dockWidget->floatingWindow()->windowHandle() : nullptr;
-+    const QSize windowTarget = soleFloatingWindow ? soleFloatingWindow->size() + contentChange : QSize();
-+
      QSize minSizeBackup = QSize(m_minimumWidth, m_minimumHeight);
      QSize maxSizeBackup = QSize(m_maximumWidth, m_maximumHeight);
  
-@@ -597,6 +689,10 @@ void DockBase::resize(int width, int height)
-     m_maximumHeight = maxSizeBackup.height();
- 
-     applySizeConstraints();
-+
-+    if (soleFloatingWindow && !contentChange.isNull() && soleFloatingWindow->size() != windowTarget) {
-+        soleFloatingWindow->resize(windowTarget);
-+    }
- }
- 
- muse::ui::INavigationSection* DockBase::navigationSection() const
-@@ -670,6 +766,7 @@ void DockBase::componentComplete()
+@@ -670,6 +755,7 @@ void DockBase::componentComplete()
      connect(this, &DockBase::maximumSizeChanged, this, &DockBase::applySizeConstraints);
  
      m_defaultVisibility = isVisible();
