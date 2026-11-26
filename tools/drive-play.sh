@@ -14,13 +14,12 @@ SHOTS=$3
 PLAY_SECONDS=${4:-6}
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 sh "${HERE}/tools/test-app.sh" "${BINARY}"
-# every launch gets its own temp folder, where MuseScore keeps the socket its instances find each other by, so it can
-# never reach a copy of the app the owner has open, and an empty home, so its data folder starts empty
+# the app alone gets its own temp folder, where MuseScore keeps the socket its instances find each other by, so it
+# can never reach a copy of the app the owner has open, and an empty home, so its data folder starts empty; the
+# osascript calls keep the shell's own, or System Events loses the process's menu bar
 FRESH=$(mktemp -d)
-TMPDIR="${FRESH}"
-export TMPDIR
 mkdir -p "${SHOTS}"
-HOME="${FRESH}" "${BINARY}" "${SCORE}" < /dev/null > /dev/null 2>&1 &
+HOME="${FRESH}" TMPDIR="${FRESH}" "${BINARY}" "${SCORE}" < /dev/null > /dev/null 2>&1 &
 PID=$!
 # the score window sits at layer 0 and floating panels at layer 3
 onscreen() { swift "${HERE}/tools/windows.swift" "${PID}" | awk '$1 == "layer" && ($2 == 0 || $2 == 3) && $4 == "onscreen=true"'; }
@@ -34,10 +33,14 @@ until [ -n "$(onscreen)" ]; do
   sleep 1
 done
 sleep 5
+# the menu bar exists only for the frontmost app, so bring it forward before any menu click
+osascript -e "tell application \"System Events\" to set frontmost of (first process whose unix id is ${PID}) to true" \
+  -e 'delay 2' > /dev/null
 # open each View menu item DRIVE_PANELS names (comma separated), so floating panels show as windows of their own
 printf '%s\n' "${DRIVE_PANELS:-}" | tr ',' '\n' | while IFS= read -r panel; do
   [ -n "${panel}" ] || continue
-  osascript -e "tell application \"System Events\" to tell (first process whose unix id is ${PID}) to click menu item \"${panel}\" of menu 1 of menu bar item \"View\" of menu bar 1" < /dev/null > /dev/null
+  osascript -e "tell application \"System Events\" to set frontmost of (first process whose unix id is ${PID}) to true" \
+    -e 'delay 1' -e "tell application \"System Events\" to tell (first process whose unix id is ${PID}) to click menu item \"${panel}\" of menu 1 of menu bar item \"View\" of menu bar 1" < /dev/null > /dev/null
   sleep 2
 done
 osascript -e "tell application \"System Events\" to set frontmost of (first process whose unix id is ${PID}) to true" \
