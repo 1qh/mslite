@@ -231,9 +231,18 @@ index 1fadd6c3..9b386419 100644
  )
  
 diff --git a/src/appshell/appshellmodule.cpp b/src/appshell/appshellmodule.cpp
-index 3fbaa47a..a36d213d 100644
+index 3fbaa47a..eb004c70 100644
 --- a/src/appshell/appshellmodule.cpp
 +++ b/src/appshell/appshellmodule.cpp
+@@ -66,7 +66,7 @@ void AppShellModule::registerExports()
+     ioc()->registerExport<ISessionsManager>(moduleName(), m_sessionsManager);
+ 
+ #ifdef Q_OS_MAC
+-    ioc()->registerExport<IAppMenuModelHook>(moduleName(), std::make_shared<MacOSAppMenuModelHook>());
++    ioc()->registerExport<IAppMenuModelHook>(moduleName(), std::make_shared<MacOSAppMenuModelHook>(iocContext()));
+ #else
+     ioc()->registerExport<IAppMenuModelHook>(moduleName(), std::make_shared<AppMenuModelHookStub>());
+ #endif
 @@ -78,15 +78,11 @@ void AppShellModule::resolveImports()
      if (ir) {
          ir->registerPageUri(Uri("musescore://home"));
@@ -398,7 +407,7 @@ index 449b1132..42bbce9e 100644
      void doOpenPreferencesDialog();
  
 diff --git a/src/appshell/internal/applicationuiactions.cpp b/src/appshell/internal/applicationuiactions.cpp
-index e62c60f5..2b11edfe 100644
+index e62c60f5..4c47b80d 100644
 --- a/src/appshell/internal/applicationuiactions.cpp
 +++ b/src/appshell/internal/applicationuiactions.cpp
 @@ -75,22 +75,6 @@ const UiActionList ApplicationUiActions::m_actions = {
@@ -424,6 +433,17 @@ index e62c60f5..2b11edfe 100644
      UiAction("revert-factory",
               mu::context::UiCtxAny,
               mu::context::CTX_ANY,
+@@ -363,10 +347,6 @@ bool ApplicationUiActions::actionChecked(const UiAction& act) const
+         return false;
+     }
+ 
+-    if (dockName == NOTATION_NAVIGATOR_PANEL_NAME) {
+-        return configuration()->isNotationNavigatorVisible();
+-    }
+-
+     if (dockName == NOTATION_BRAILLE_PANEL_NAME) {
+         return brailleConfiguration() && brailleConfiguration()->braillePanelEnabled();
+     }
 diff --git a/src/appshell/internal/appshellconfiguration.cpp b/src/appshell/internal/appshellconfiguration.cpp
 index 6c1316eb..e92a3a65 100644
 --- a/src/appshell/internal/appshellconfiguration.cpp
@@ -673,20 +693,143 @@ index 8e506845..b08ff7fc 100644
      muse::async::Notification m_startupModeTypeChanged;
      muse::async::Notification m_startupScorePathChanged;
  };
+diff --git a/src/appshell/internal/platform/macos/macosappmenumodelhook.h b/src/appshell/internal/platform/macos/macosappmenumodelhook.h
+index 1e2fb2df..43ddd632 100644
+--- a/src/appshell/internal/platform/macos/macosappmenumodelhook.h
++++ b/src/appshell/internal/platform/macos/macosappmenumodelhook.h
+@@ -21,12 +21,33 @@
+  */
+ #pragma once
+ 
++#include <memory>
++
+ #include "../../iappmenumodelhook.h"
++#include "async/asyncable.h"
++#include "context/iglobalcontext.h"
++#include "modularity/ioc.h"
+ 
+ namespace mu::appshell {
+-class MacOSAppMenuModelHook : public IAppMenuModelHook
++class MacOSAppMenuModelHook : public IAppMenuModelHook, public muse::Contextable, public muse::async::Asyncable
+ {
++    muse::ContextInject<context::IGlobalContext> globalContext = { this };
++
+ public:
++    explicit MacOSAppMenuModelHook(const muse::modularity::ContextPtr& iocCtx);
++    ~MacOSAppMenuModelHook() override;
++
+     void onAppMenuInited() override;
++
++private:
++    void onCurrentProjectChanged();
++    void scheduleNativeMenuUpdate();
++    void updateNativeMenu();
++    void updateApplicationMenuTitle();
++
++    struct NativeMenuObserver;
++    muse::async::Asyncable m_projectSubscriptions;
++    std::unique_ptr<NativeMenuObserver> m_nativeMenuObserver;
++    bool m_inited = false;
+ };
+ }
 diff --git a/src/appshell/internal/platform/macos/macosappmenumodelhook.mm b/src/appshell/internal/platform/macos/macosappmenumodelhook.mm
-index 1c39edb7..e54f4f71 100644
+index 1c39edb7..74aa7dd1 100644
 --- a/src/appshell/internal/platform/macos/macosappmenumodelhook.mm
 +++ b/src/appshell/internal/platform/macos/macosappmenumodelhook.mm
-@@ -26,8 +26,40 @@
+@@ -23,11 +23,183 @@
+ #include "macosappmenumodelhook.h"
+ 
+ #include <Cocoa/Cocoa.h>
++#include <objc/runtime.h>
++
++#include <QTimer>
++#include <vector>
++
++static NSNotificationName const MuseMainMenuDidChangeNotification = @"MuseMainMenuDidChangeNotification";
++
++@interface NSApplication (MuseAppMenuTitle)
++- (void)muse_appMenuTitle_setMainMenu:(NSMenu*)menu;
++@end
++
++@implementation NSApplication (MuseAppMenuTitle)
++- (void)muse_appMenuTitle_setMainMenu:(NSMenu*)menu
++{
++    [self muse_appMenuTitle_setMainMenu:menu];
++    [[NSNotificationCenter defaultCenter] postNotificationName:MuseMainMenuDidChangeNotification object:self];
++}
++@end
  
  using namespace mu::appshell;
  
-+//! Give the app a standard Window menu: AppKit fills a menu registered as the windows menu with Minimize, Zoom, Fill,
-+//! Center, the tiling commands and the window list, and their shortcuts (such as Fn-Control-F) work through it
++struct MacOSAppMenuModelHook::NativeMenuObserver {
++    ~NativeMenuObserver()
++    {
++        for (id observer : observers) {
++            [[NSNotificationCenter defaultCenter] removeObserver:observer];
++        }
++    }
++
++    std::vector<id> observers;
++    QTimer timer;
++    bool updatePending = false;
++};
++
++MacOSAppMenuModelHook::MacOSAppMenuModelHook(const muse::modularity::ContextPtr& iocCtx)
++    : muse::Contextable(iocCtx), m_nativeMenuObserver(std::make_unique<NativeMenuObserver>())
++{
++}
++
++MacOSAppMenuModelHook::~MacOSAppMenuModelHook() = default;
++
++void MacOSAppMenuModelHook::updateApplicationMenuTitle()
++{
++    NSMenu* mainMenu = [NSApp mainMenu];
++    if (!mainMenu || [mainMenu numberOfItems] == 0) {
++        return;
++    }
++
++    NSString* title = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleDisplayName"];
++    if (![title length]) {
++        title = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleName"];
++    }
++    if (![title length]) {
++        title = [[NSProcessInfo processInfo] processName];
++    }
++    if (auto project = globalContext()->currentProject()) {
++        QString name = project->isNewlyCreated() || project->path().empty()
++                       ? project->displayName() : muse::io::filename(project->path(), false).toQString();
++        title = name.toNSString();
++    }
++
++    NSMenuItem* appItem = [mainMenu itemAtIndex:0];
++    if (![[appItem title] isEqualToString:title]) {
++        [appItem setTitle:title];
++    }
++    NSMenu* appMenu = [appItem submenu];
++    if (appMenu && ![[appMenu title] isEqualToString:title]) {
++        [appMenu setTitle:title];
++    }
++}
++
++void MacOSAppMenuModelHook::onCurrentProjectChanged()
++{
++    m_projectSubscriptions.async_disconnectAll();
++    if (auto project = globalContext()->currentProject()) {
++        project->pathChanged().onNotify(&m_projectSubscriptions, [this]() {
++            updateNativeMenu();
++        });
++        project->displayNameChanged().onNotify(&m_projectSubscriptions, [this]() {
++            updateNativeMenu();
++        });
++    }
++    updateNativeMenu();
++}
++
 +static void ensureWindowsMenu()
 +{
 +    NSMenu* mainMenu = [NSApp mainMenu];
-+    if (!mainMenu || ([NSApp windowsMenu] && [mainMenu indexOfItemWithSubmenu:[NSApp windowsMenu]] >= 0)) {
++    if (!mainMenu || [mainMenu numberOfItems] == 0
++        || ([NSApp windowsMenu] && [mainMenu indexOfItemWithSubmenu:[NSApp windowsMenu]] >= 0)) {
 +        return;
 +    }
 +
@@ -703,20 +846,79 @@ index 1c39edb7..e54f4f71 100644
 +    [NSApp setWindowsMenu:windowMenu];
 +}
 +
++void MacOSAppMenuModelHook::scheduleNativeMenuUpdate()
++{
++    if (m_nativeMenuObserver->updatePending) {
++        return;
++    }
++    m_nativeMenuObserver->updatePending = true;
++    QTimer::singleShot(0, &m_nativeMenuObserver->timer, [this]() {
++        m_nativeMenuObserver->updatePending = false;
++        updateNativeMenu();
++    });
++}
++
++void MacOSAppMenuModelHook::updateNativeMenu()
++{
++    ensureWindowsMenu();
++    updateApplicationMenuTitle();
++}
++
  void MacOSAppMenuModelHook::onAppMenuInited()
  {
++    if (m_inited) {
++        return;
++    }
++    m_inited = true;
++
      [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"NSDisabledDictationMenuItem"];
      [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"NSDisabledCharacterPaletteMenuItem"];
 +
-+    // Qt builds the native menu bar after this runs and can rebuild it later, so add the menu once it exists and again
-+    // whenever the menu bar changes
-+    dispatch_async(dispatch_get_main_queue(), ^{
-+        ensureWindowsMenu();
++    static dispatch_once_t once;
++    dispatch_once(&once, ^{
++        Method original = class_getInstanceMethod([NSApplication class], @selector(setMainMenu:));
++        Method replacement = class_getInstanceMethod([NSApplication class], @selector(muse_appMenuTitle_setMainMenu:));
++        method_exchangeImplementations(original, replacement);
 +    });
-+    [[NSNotificationCenter defaultCenter] addObserverForName:NSMenuDidChangeItemNotification object:nil queue:nil
-+                                                  usingBlock:^(NSNotification*) {
-+        ensureWindowsMenu();
++
++    for (NSNotificationName name : { NSMenuDidChangeItemNotification, NSMenuDidAddItemNotification,
++                                    NSMenuDidRemoveItemNotification, MuseMainMenuDidChangeNotification }) {
++        id observer = [[NSNotificationCenter defaultCenter] addObserverForName:name object:nil
++                                                                       queue:[NSOperationQueue mainQueue]
++                                                                  usingBlock:^(NSNotification*) {
++            scheduleNativeMenuUpdate();
++        }];
++        m_nativeMenuObserver->observers.push_back(observer);
++    }
++
++    //! NOTE AppKit redraws the application menu with the app's own name when the app becomes active, without changing
++    //! the menu item's title, so a title that is already equal is set again through an empty one to make AppKit redraw it
++    id activeObserver = [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationDidBecomeActiveNotification
++                                                                          object:nil
++                                                                           queue:[NSOperationQueue mainQueue]
++                                                                      usingBlock:^(NSNotification*) {
++        NSMenuItem* appItem = [[NSApp mainMenu] numberOfItems] > 0 ? [[NSApp mainMenu] itemAtIndex:0] : nil;
++        if (appItem) {
++            NSString* title = [[appItem title] copy];
++            [appItem setTitle:@""];
++            [appItem setTitle:title];
++        }
++        updateNativeMenu();
 +    }];
++    m_nativeMenuObserver->observers.push_back(activeObserver);
++
++    QObject::connect(&m_nativeMenuObserver->timer, &QTimer::timeout, &m_nativeMenuObserver->timer, [this]() {
++        updateNativeMenu();
++    });
++    m_nativeMenuObserver->timer.setInterval(100);
++    m_nativeMenuObserver->timer.start();
++
++    globalContext()->currentProjectChanged().onNotify(this, [this]() {
++        onCurrentProjectChanged();
++    });
++    onCurrentProjectChanged();
++
++    scheduleNativeMenuUpdate();
  }
 diff --git a/src/appshell/internal/startupscenario.cpp b/src/appshell/internal/startupscenario.cpp
 index fad6a767..d1f31f31 100644
@@ -4793,7 +4995,7 @@ index 70be7729..d4f24462 100644
  import MuseScore.Project
  import MuseScore.MuseSounds
 diff --git a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
-index dd4b7cf8..e1ae4907 100644
+index dd4b7cf8..d802f759 100644
 --- a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
 +++ b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
 @@ -117,11 +117,16 @@ DockPage {
@@ -4879,13 +5081,15 @@ index dd4b7cf8..e1ae4907 100644
              title: qsTrc("appshell", "Note input")
  
              dropDestinations: [
-@@ -250,14 +279,20 @@ DockPage {
+@@ -249,18 +278,25 @@ DockPage {
+     panels: [
          DockPanel {
              id: palettesPanel
- 
++            fitFloatingContent: true
++
 +            defaultFloating: true
 +            floatable: true
-+
+ 
              objectName: root.pageModel.palettesPanelName()
 +
 +            // Hidden on open: the score view starts as the sheet alone
@@ -4895,19 +5099,26 @@ index dd4b7cf8..e1ae4907 100644
              navigationSection: root.navigationPanelSec(palettesPanel.location)
  
              width: root.verticalPanelDefaultWidth
-             minimumWidth: root.verticalPanelDefaultWidth
+-            minimumWidth: root.verticalPanelDefaultWidth
 -            maximumWidth: root.verticalPanelDefaultWidth
-+            maximumWidth: floating ? root.panelMaxDimension : root.verticalPanelDefaultWidth
++            minimumWidth: floating ? root.panelMinDimension : root.verticalPanelDefaultWidth
++            maximumWidth: floating ? Math.max(root.panelMaxDimension, naturalContentSize.width) : root.verticalPanelDefaultWidth
  
              minimumHeight: root.panelMinDimension
-             maximumHeight: root.panelMaxDimension
-@@ -279,14 +314,20 @@ DockPage {
+-            maximumHeight: root.panelMaxDimension
++            maximumHeight: Math.max(root.panelMaxDimension, naturalContentSize.height)
+ 
+             groupName: root.verticalPanelsGroup
+ 
+@@ -278,18 +314,25 @@ DockPage {
+ 
          DockPanel {
              id: layoutPanel
- 
++            fitFloatingContent: true
++
 +            defaultFloating: true
 +            floatable: true
-+
+ 
              objectName: root.pageModel.layoutPanelName()
 +
 +            // Hidden on open: the score view starts as the sheet alone
@@ -4917,13 +5128,18 @@ index dd4b7cf8..e1ae4907 100644
              navigationSection: root.navigationPanelSec(layoutPanel.location)
  
              width: root.verticalPanelDefaultWidth
-             minimumWidth: root.verticalPanelDefaultWidth
+-            minimumWidth: root.verticalPanelDefaultWidth
 -            maximumWidth: root.verticalPanelDefaultWidth
-+            maximumWidth: floating ? root.panelMaxDimension : root.verticalPanelDefaultWidth
++            minimumWidth: floating ? root.panelMinDimension : root.verticalPanelDefaultWidth
++            maximumWidth: floating ? Math.max(root.panelMaxDimension, naturalContentSize.width) : root.verticalPanelDefaultWidth
  
              minimumHeight: root.panelMinDimension
-             maximumHeight: root.panelMaxDimension
-@@ -308,14 +349,20 @@ DockPage {
+-            maximumHeight: root.panelMaxDimension
++            maximumHeight: Math.max(root.panelMaxDimension, naturalContentSize.height)
+ 
+             groupName: root.verticalPanelsGroup
+ 
+@@ -308,14 +351,20 @@ DockPage {
          DockPanel {
              id: inspectorPanel
  
@@ -4945,45 +5161,59 @@ index dd4b7cf8..e1ae4907 100644
  
              minimumHeight: root.panelMinDimension
              maximumHeight: root.panelMaxDimension
-@@ -334,6 +381,9 @@ DockPage {
+@@ -333,6 +382,10 @@ DockPage {
+ 
          DockPanel {
              id: selectionFilterPanel
- 
++            fitFloatingContent: true
++
 +            defaultFloating: true
 +            floatable: true
-+
+ 
              objectName: root.pageModel.selectionFiltersPanelName()
              title: qsTrc("appshell", "Selection filter")
- 
-@@ -341,7 +391,7 @@ DockPage {
+@@ -340,11 +393,11 @@ DockPage {
+             navigationSection: root.navigationPanelSec(selectionFilterPanel.location)
  
              width: root.verticalPanelDefaultWidth
-             minimumWidth: root.verticalPanelDefaultWidth
+-            minimumWidth: root.verticalPanelDefaultWidth
 -            maximumWidth: root.verticalPanelDefaultWidth
-+            maximumWidth: floating ? root.panelMaxDimension : root.verticalPanelDefaultWidth
++            minimumWidth: floating ? root.panelMinDimension : root.verticalPanelDefaultWidth
++            maximumWidth: floating ? Math.max(root.panelMaxDimension, naturalContentSize.width) : root.verticalPanelDefaultWidth
  
              minimumHeight: root.panelMinDimension
-             maximumHeight: root.panelMaxDimension
-@@ -362,6 +412,9 @@ DockPage {
+-            maximumHeight: root.panelMaxDimension
++            maximumHeight: Math.max(root.panelMaxDimension, naturalContentSize.height)
+ 
+             groupName: root.verticalPanelsGroup
+ 
+@@ -361,6 +414,10 @@ DockPage {
+ 
          DockPanel {
              id: undoHistoryPanel
- 
++            fitFloatingContent: true
++
 +            defaultFloating: true
 +            floatable: true
-+
+ 
              objectName: root.pageModel.undoHistoryPanelName()
              title: qsTrc("notation", "History")
- 
-@@ -369,7 +422,7 @@ DockPage {
+@@ -368,11 +425,11 @@ DockPage {
+             navigationSection: root.navigationPanelSec(undoHistoryPanel.location)
  
              width: root.verticalPanelDefaultWidth
-             minimumWidth: root.verticalPanelDefaultWidth
+-            minimumWidth: root.verticalPanelDefaultWidth
 -            maximumWidth: root.verticalPanelDefaultWidth
-+            maximumWidth: floating ? root.panelMaxDimension : root.verticalPanelDefaultWidth
++            minimumWidth: floating ? root.panelMinDimension : root.verticalPanelDefaultWidth
++            maximumWidth: floating ? Math.max(root.panelMaxDimension, naturalContentSize.width) : root.verticalPanelDefaultWidth
  
              minimumHeight: root.panelMinDimension
-             maximumHeight: root.panelMaxDimension
-@@ -395,12 +448,15 @@ DockPage {
+-            maximumHeight: root.panelMaxDimension
++            maximumHeight: Math.max(root.panelMaxDimension, naturalContentSize.height)
+ 
+             groupName: root.verticalPanelsGroup
+             location: Location.Right
+@@ -395,12 +452,15 @@ DockPage {
          DockPanel {
              id: mixerPanel
  
@@ -5000,7 +5230,7 @@ index dd4b7cf8..e1ae4907 100644
  
              minimumWidth: root.panelMinDimension
              maximumWidth: root.panelMaxDimension
-@@ -433,13 +489,13 @@ DockPage {
+@@ -433,13 +493,13 @@ DockPage {
                  }
  
                  onResizeRequested: function(newWidth, newHeight) {
@@ -5016,7 +5246,7 @@ index dd4b7cf8..e1ae4907 100644
                      }
                  }
              }
-@@ -458,36 +514,55 @@ DockPage {
+@@ -458,39 +518,100 @@ DockPage {
              minimumWidth: root.panelMinDimension
              maximumWidth: root.panelMaxDimension
  
@@ -5060,38 +5290,89 @@ index dd4b7cf8..e1ae4907 100644
              }
          },
  
++        DockPanel {
++            id: navigatorPanel
++            defaultFloating: true
++            fitFloatingContent: true
++            floatable: true
++            objectName: root.pageModel.navigatorPanelName()
++            title: qsTrc('appshell', 'Navigator')
++            width: root.verticalPanelDefaultWidth
++            height: root.horizontalPanelMinHeight
++            visible: false
++            minimumWidth: root.panelMinDimension
++            minimumHeight: root.panelMinDimension
++            maximumWidth: Math.max(root.panelMaxDimension, naturalContentSize.width)
++            maximumHeight: Math.max(root.panelMaxDimension, naturalContentSize.height)
++            location: Location.Bottom
++            navigationSection: root.navigationPanelSec(navigatorPanel.location)
++            Item {
++                implicitWidth: navigator.implicitWidth
++                implicitHeight: navigator.implicitHeight
++                clip: true
++                NotationNavigator {
++                    id: navigator
++                    anchors.fill: parent
++                    objectName: 'MainNotationViewNavigator'
++                    fitFullContent: true
++                    Component.onCompleted: {
++                        load()
++                        setCursorRect(notationView.paintView.viewport)
++                    }
++                    onMoveNotationRequested: function(dx, dy) {
++                        notationView.paintView.moveCanvas(dx, dy)
++                    }
++                    Connections {
++                        target: notationView.paintView
++                        function onViewportChanged() {
++                            navigator.setCursorRect(notationView.paintView.viewport)
++                        }
++                    }
++                }
++            }
++        },
          DockPanel {
              id: timelinePanel
- 
++            fitFloatingContent: true
++
 +            defaultFloating: true
 +            floatable: true
-+
+ 
              objectName: root.pageModel.timelinePanelName()
              title: qsTrc("appshell", "Timeline")
  
              height: 200
-             minimumHeight: root.horizontalPanelMinHeight
+-            minimumHeight: root.horizontalPanelMinHeight
 -            maximumHeight: root.horizontalPanelMaxHeight
-+            maximumHeight: floating ? root.panelMaxDimension : root.horizontalPanelMaxHeight
++            minimumHeight: floating ? root.panelMinDimension : root.horizontalPanelMinHeight
++            maximumHeight: floating ? Math.max(root.panelMaxDimension, naturalContentSize.height) : root.horizontalPanelMaxHeight
  
              minimumWidth: root.panelMinDimension
-             maximumWidth: root.panelMaxDimension
-@@ -512,9 +587,14 @@ DockPage {
+-            maximumWidth: root.panelMaxDimension
++            maximumWidth: Math.max(root.panelMaxDimension, naturalContentSize.width)
+ 
+             groupName: root.horizontalPanelsGroup
+ 
+@@ -511,18 +632,24 @@ DockPage {
+ 
          DockPanel {
              id: drumsetPanel
- 
-+            defaultFloating: true
++            fitFloatingContent: true
 +
++            defaultFloating: true
+ 
              objectName: root.pageModel.drumsetPanelName()
              title: qsTrc("appshell", "Drumset tools")
  
 +            minimumWidth: root.panelMinDimension
-+            maximumWidth: root.panelMaxDimension
++            maximumWidth: Math.max(root.panelMaxDimension, naturalContentSize.width)
 +
              height: 64
-             minimumHeight: 64
-             maximumHeight: 64
-@@ -522,7 +602,7 @@ DockPage {
+-            minimumHeight: 64
+-            maximumHeight: 64
++            minimumHeight: floating ? root.panelMinDimension : 64
++            maximumHeight: floating ? Math.max(root.panelMaxDimension, naturalContentSize.height) : 64
+ 
              //! NOTE: hidden by default
              visible: false
  
@@ -5100,24 +5381,60 @@ index dd4b7cf8..e1ae4907 100644
              closable: false
  
              location: Location.Bottom
-@@ -538,12 +618,15 @@ DockPage {
+@@ -537,16 +664,20 @@ DockPage {
+ 
          DockPanel {
              id: percussionPanel
- 
++            fitFloatingContent: true
++
 +            defaultFloating: true
 +            floatable: true
-+
+ 
              objectName: root.pageModel.percussionPanelName()
              title: qsTrc("appshell", "Percussion")
  
              height: 200
-             minimumHeight: root.horizontalPanelMinHeight
+-            minimumHeight: root.horizontalPanelMinHeight
 -            maximumHeight: root.horizontalPanelMaxHeight
-+            maximumHeight: floating ? root.panelMaxDimension : root.horizontalPanelMaxHeight
++            minimumHeight: floating ? root.panelMinDimension : root.horizontalPanelMinHeight
++            maximumHeight: floating ? Math.max(root.panelMaxDimension, naturalContentSize.height) : root.horizontalPanelMaxHeight
  
              minimumWidth: root.panelMinDimension
-             maximumWidth: root.panelMaxDimension
-@@ -609,41 +692,12 @@ DockPage {
+-            maximumWidth: root.panelMaxDimension
++            maximumWidth: Math.max(root.panelMaxDimension, naturalContentSize.width)
+ 
+             groupName: root.horizontalPanelsGroup
+ 
+@@ -574,13 +705,17 @@ DockPage {
+                 }
+ 
+                 onResizeRequested: function(newWidth, newHeight) {
+-                    percussionPanel.resize(newWidth, newHeight)
++                    if (!percussionPanel.floating) {
++                        percussionPanel.resize(newWidth, newHeight)
++                    }
+                 }
+ 
+                 Connections {
+                     target: percussionPanel
+                     function onPanelShown() {
+-                        percussionComponent.resizePanelToContentHeight()
++                        if (!percussionPanel.floating) {
++                            percussionComponent.resizePanelToContentHeight()
++                        }
+                     }
+                 }
+             }
+@@ -591,7 +726,7 @@ DockPage {
+         id: notationView
+         name: "MainNotationView"
+ 
+-        isNavigatorVisible: root.pageModel.isNavigatorVisible
++        isNavigatorVisible: false
+         isBraillePanelVisible: root.pageModel.isBraillePanelVisible
+         isMainView: true
+ 
+@@ -609,41 +744,12 @@ DockPage {
      statusBar: DockStatusBar {
          objectName: root.pageModel.statusBarName()
  
@@ -6336,7 +6653,7 @@ index b6a0567f..cfd0e4cb 100644
      setFileModified(project->needSave().val);
  }
 diff --git a/src/appshell/qml/MuseScore/AppShell/notationpagemodel.cpp b/src/appshell/qml/MuseScore/AppShell/notationpagemodel.cpp
-index e61f2540..6011b19c 100644
+index e61f2540..6f453946 100644
 --- a/src/appshell/qml/MuseScore/AppShell/notationpagemodel.cpp
 +++ b/src/appshell/qml/MuseScore/AppShell/notationpagemodel.cpp
 @@ -21,6 +21,8 @@
@@ -6361,7 +6678,19 @@ index e61f2540..6011b19c 100644
      brailleConfiguration()->braillePanelEnabledChanged().onNotify(this, [this]() {
          emit isBraillePanelVisibleChanged();
      });
-@@ -183,6 +191,17 @@ void NotationPageModel::onNotationChanged()
+@@ -156,6 +164,11 @@ QString NotationPageModel::pianoKeyboardPanelName() const
+     return PIANO_KEYBOARD_PANEL_NAME;
+ }
+ 
++QString NotationPageModel::navigatorPanelName() const
++{
++    return NOTATION_NAVIGATOR_PANEL_NAME;
++}
++
+ QString NotationPageModel::timelinePanelName() const
+ {
+     return TIMELINE_PANEL_NAME;
+@@ -183,6 +196,17 @@ void NotationPageModel::onNotationChanged()
          return;
      }
  
@@ -6379,8 +6708,21 @@ index e61f2540..6011b19c 100644
      INotationNoteInputPtr noteInput = notation->interaction()->noteInput();
      noteInput->stateChanged().onNotify(this, [this]() {
          scheduleUpdateDrumsetPanelVisibility();
+@@ -198,12 +222,6 @@ void NotationPageModel::onNotationChanged()
+ 
+ void NotationPageModel::toggleDock(const QString& name)
+ {
+-    if (name == NOTATION_NAVIGATOR_PANEL_NAME) {
+-        configuration()->setIsNotationNavigatorVisible(!isNavigatorVisible());
+-        emit isNavigatorVisibleChanged();
+-        return;
+-    }
+-
+     if (name == NOTATION_BRAILLE_PANEL_NAME) {
+         brailleConfiguration()->setBraillePanelEnabled(!isBraillePanelVisible());
+         emit isBraillePanelVisibleChanged();
 diff --git a/src/appshell/qml/MuseScore/AppShell/notationpagemodel.h b/src/appshell/qml/MuseScore/AppShell/notationpagemodel.h
-index 771d2645..759ed5bb 100644
+index 771d2645..2cdbc207 100644
 --- a/src/appshell/qml/MuseScore/AppShell/notationpagemodel.h
 +++ b/src/appshell/qml/MuseScore/AppShell/notationpagemodel.h
 @@ -24,6 +24,8 @@
@@ -6410,6 +6752,14 @@ index 771d2645..759ed5bb 100644
  
  public:
      explicit NotationPageModel(QObject* parent = nullptr);
+@@ -78,6 +84,7 @@ public:
+ 
+     Q_INVOKABLE QString mixerPanelName() const;
+     Q_INVOKABLE QString pianoKeyboardPanelName() const;
++    Q_INVOKABLE QString navigatorPanelName() const;
+     Q_INVOKABLE QString timelinePanelName() const;
+     Q_INVOKABLE QString drumsetPanelName() const;
+     Q_INVOKABLE QString percussionPanelName() const;
 diff --git a/src/appshell/qml/MuseScore/AppShell/resources/OnlineSoundsPreview.gif b/src/appshell/qml/MuseScore/AppShell/resources/OnlineSoundsPreview.gif
 deleted file mode 100644
 index 05020908a5939c96ac2e21c9e2a97281c4ecf37c..0000000000000000000000000000000000000000
@@ -35215,7 +35565,7 @@ index 7bd4804a..eeedcf18 100644
      bool shouldWarnBeforeSavingDiagnosticFiles() const override;
      void setShouldWarnBeforeSavingDiagnosticFiles(bool val) override;
 diff --git a/src/framework/dockwindow/internal/dockbase.cpp b/src/framework/dockwindow/internal/dockbase.cpp
-index 87246785..744acbde 100644
+index 87246785..c029df0d 100644
 --- a/src/framework/dockwindow/internal/dockbase.cpp
 +++ b/src/framework/dockwindow/internal/dockbase.cpp
 @@ -23,8 +23,10 @@
@@ -35332,7 +35682,7 @@ index 87246785..744acbde 100644
  }
  
  void DockBase::close()
-@@ -575,6 +645,21 @@ void DockBase::resize(int width, int height)
+@@ -575,6 +645,28 @@ void DockBase::resize(int width, int height)
      width = qBound(m_minimumWidth, width, m_maximumWidth);
      height = qBound(m_minimumHeight, height, m_maximumHeight);
  
@@ -35351,10 +35701,28 @@ index 87246785..744acbde 100644
 +        }
 +    }
 +
++    //! NOTE The layout constraints below only ever grow a floating window to its content, never shrink it, so a floating
++    //! window holding this dock alone is resized by the same change as its content
++    const QSize contentChange(width - qCeil(this->width()), height - qCeil(this->height()));
++    auto* soleFloatingWindow = m_dockWidget->floatingWindow() && m_dockWidget->floatingWindow()->hasSingleDockWidget()
++                               ? m_dockWidget->floatingWindow()->windowHandle() : nullptr;
++    const QSize windowTarget = soleFloatingWindow ? soleFloatingWindow->size() + contentChange : QSize();
++
      QSize minSizeBackup = QSize(m_minimumWidth, m_minimumHeight);
      QSize maxSizeBackup = QSize(m_maximumWidth, m_maximumHeight);
  
-@@ -670,6 +755,7 @@ void DockBase::componentComplete()
+@@ -597,6 +689,10 @@ void DockBase::resize(int width, int height)
+     m_maximumHeight = maxSizeBackup.height();
+ 
+     applySizeConstraints();
++
++    if (soleFloatingWindow && !contentChange.isNull() && soleFloatingWindow->size() != windowTarget) {
++        soleFloatingWindow->resize(windowTarget);
++    }
+ }
+ 
+ muse::ui::INavigationSection* DockBase::navigationSection() const
+@@ -670,6 +766,7 @@ void DockBase::componentComplete()
      connect(this, &DockBase::maximumSizeChanged, this, &DockBase::applySizeConstraints);
  
      m_defaultVisibility = isVisible();
@@ -35416,6 +35784,43 @@ index f2a0a616..b6ba9ea6 100644
  
      bool m_isCompact = false;
      int m_compactPriorityOrder = -1;
+diff --git a/src/framework/dockwindow/qml/Muse/Dock/DockPanel.qml b/src/framework/dockwindow/qml/Muse/Dock/DockPanel.qml
+index e23411a1..8b3d31ca 100644
+--- a/src/framework/dockwindow/qml/Muse/Dock/DockPanel.qml
++++ b/src/framework/dockwindow/qml/Muse/Dock/DockPanel.qml
+@@ -27,6 +27,25 @@ DockPanelView {
+     id: root
+ 
+     default property alias contentComponent : contentLoader.sourceComponent
++    property bool fitFloatingContent: false
++    readonly property size naturalContentSize: Qt.size(contentLoader.item?.implicitWidth ?? 0,
++                                                       contentLoader.item?.implicitHeight ?? 0)
++    function fitContent() {
++        if (!fitFloatingContent || !floating || !visible || !contentLoader.item) {
++            return
++        }
++        const content = contentLoader.item
++        if (content.implicitWidth > 0 && content.implicitHeight > 0) {
++            resize(Math.ceil(content.implicitWidth), Math.ceil(content.implicitHeight))
++        }
++    }
++    onPanelShown: Qt.callLater(root.fitContent)
++    onFloatingChanged: Qt.callLater(root.fitContent)
++    Connections {
++        target: contentLoader.item
++        function onImplicitWidthChanged() { Qt.callLater(root.fitContent) }
++        function onImplicitHeightChanged() { Qt.callLater(root.fitContent) }
++    }
+ 
+     navigationSection: Boolean(contentLoader.item) && Boolean(contentLoader.item.navigationSection) ?
+                            contentLoader.item.navigationSection : null
+@@ -35,5 +54,6 @@ DockPanelView {
+         id: contentLoader
+ 
+         active: root.visible && root.inited
++        onLoaded: Qt.callLater(root.fitContent)
+     }
+ }
 diff --git a/src/framework/dockwindow/qml/Muse/Dock/dockpanelview.cpp b/src/framework/dockwindow/qml/Muse/Dock/dockpanelview.cpp
 index b56058f6..c6d4775b 100644
 --- a/src/framework/dockwindow/qml/Muse/Dock/dockpanelview.cpp
@@ -36164,6 +36569,18 @@ index ac2d5d9e..10c52887 100644
  bool MacOSMainWindowBridge::fileModified() const
  {
      //! NOTE QWindow misses an API for this, so we'll do it ourselves.
+diff --git a/src/framework/uicomponents/qml/Muse/UiComponents/VisibilityControls.qml b/src/framework/uicomponents/qml/Muse/UiComponents/VisibilityControls.qml
+index 435a88e6..ae1feaf0 100644
+--- a/src/framework/uicomponents/qml/Muse/UiComponents/VisibilityControls.qml
++++ b/src/framework/uicomponents/qml/Muse/UiComponents/VisibilityControls.qml
+@@ -81,6 +81,7 @@ RowLayout {
+     }
+ 
+     Item {
++        implicitWidth: expandButton.width + 4 + titleLabel.implicitWidth + 8
+         Layout.fillWidth: true
+         Layout.leftMargin: 12 * root.expandableDepth
+         height: childrenRect.height
 diff --git a/src/importexport/audioexport/internal/abstractaudiowriter.cpp b/src/importexport/audioexport/internal/abstractaudiowriter.cpp
 index adf9e1c1..ac3c9602 100644
 --- a/src/importexport/audioexport/internal/abstractaudiowriter.cpp
@@ -36209,6 +36626,96 @@ index b0592c69..16e03f75 100644
  }
  
  void InstrumentsActionsController::selectInstruments()
+diff --git a/src/instrumentsscene/qml/MuseScore/InstrumentsScene/LayoutPanel.qml b/src/instrumentsscene/qml/MuseScore/InstrumentsScene/LayoutPanel.qml
+index e7ff8d8c..031d1b84 100644
+--- a/src/instrumentsscene/qml/MuseScore/InstrumentsScene/LayoutPanel.qml
++++ b/src/instrumentsscene/qml/MuseScore/InstrumentsScene/LayoutPanel.qml
+@@ -37,6 +37,21 @@ Item {
+ 
+     property alias contextMenuModel: contextMenuModel
+ 
++    function contentWidthHint(item) {
++        if (item.naturalWidth !== undefined) {
++            return item.naturalWidth
++        }
++        let result = 0
++        for (const child of item.children) {
++            result = Math.max(result, contentWidthHint(child))
++        }
++        return result
++    }
++    implicitWidth: Math.max(controlPanel.implicitWidth + 2 * contentColumn.sideMargin,
++                            contentWidthHint(layoutPanelTreeView.flickableItem.contentItem))
++    implicitHeight: controlPanel.implicitHeight + contentColumn.spacing
++                    + (layoutPanelTreeView.visible
++                       ? layoutPanelTreeView.flickableItem.count * layoutPanelTreeView.delegateHeight : emptyHint.implicitHeight + 12)
+     onVisibleChanged: {
+         treeModel.setLayoutPanelVisible(root.visible)
+     }
+@@ -123,6 +138,7 @@ Item {
+         }
+ 
+         StyledTextLabel {
++            id: emptyHint
+             Layout.fillWidth: true
+             Layout.fillHeight: true
+             Layout.topMargin: 12
+@@ -163,6 +179,8 @@ Item {
+ 
+             alternatingRowColors: false
+             headerVisible: false
++            flickableItem.displayMarginBeginning: flickableItem.contentHeight
++            flickableItem.displayMarginEnd: flickableItem.contentHeight
+ 
+             function expandCollapseAll(expand) {
+                 for (let row = 0; row < layoutPanelTreeView.model.rowCount(); ++row) {
+@@ -206,6 +224,7 @@ Item {
+ 
+             TableViewColumn {
+                 role: "item"
++                width: Math.max(layoutPanelTreeView.width, root.implicitWidth)
+             }
+ 
+             function isControl(itemType) {
+@@ -225,6 +244,7 @@ Item {
+ 
+             itemDelegate: DropArea {
+                 id: dropArea
++                readonly property real naturalWidth: treeItemDelegateLoader.item ? treeItemDelegateLoader.item.implicitWidth : 0
+ 
+                 Loader {
+                     id: treeItemDelegateLoader
+diff --git a/src/instrumentsscene/qml/MuseScore/InstrumentsScene/internal/LayoutPanelItemControl.qml b/src/instrumentsscene/qml/MuseScore/InstrumentsScene/internal/LayoutPanelItemControl.qml
+index 69c1d326..2dee50e4 100644
+--- a/src/instrumentsscene/qml/MuseScore/InstrumentsScene/internal/LayoutPanelItemControl.qml
++++ b/src/instrumentsscene/qml/MuseScore/InstrumentsScene/internal/LayoutPanelItemControl.qml
+@@ -45,11 +45,12 @@ ListItemBlank {
+     width: parent ? parent.width : implicitWidth
+ 
+     implicitHeight: 38
+-    implicitWidth: 248
++    implicitWidth: contentRow.implicitWidth + contentRow.anchors.leftMargin + root.sideMargin
+ 
+     background.border.width: 0
+ 
+     RowLayout {
++        id: contentRow
+         anchors.fill: parent
+ 
+         // 70 = 32+2+32+4 for the buttons and spacing in LayoutPanelItemDelegate
+diff --git a/src/instrumentsscene/qml/MuseScore/InstrumentsScene/internal/LayoutPanelItemDelegate.qml b/src/instrumentsscene/qml/MuseScore/InstrumentsScene/internal/LayoutPanelItemDelegate.qml
+index d5ba0cf5..a88dc491 100644
+--- a/src/instrumentsscene/qml/MuseScore/InstrumentsScene/internal/LayoutPanelItemDelegate.qml
++++ b/src/instrumentsscene/qml/MuseScore/InstrumentsScene/internal/LayoutPanelItemDelegate.qml
+@@ -85,7 +85,7 @@ FocusableControl {
+     width: parent ? parent.width : implicitWidth
+ 
+     implicitHeight: 38
+-    implicitWidth: 248
++    implicitWidth: visibilityControls.implicitWidth + 2 * root.sideMargin
+ 
+     Drag.keys: [ root.filterKey ]
+     Drag.active: prv.dragged && root.isSelectable
 diff --git a/src/notation/inotationmidiinput.h b/src/notation/inotationmidiinput.h
 index cc2195e7..d3ed2038 100644
 --- a/src/notation/inotationmidiinput.h
@@ -36695,6 +37202,23 @@ index 085b38bf..b4cb032b 100644
  
              onClosed: {
                  fakeNavCtrl.requestActive()
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/PercussionPanel.qml b/src/notationscene/qml/MuseScore/NotationScene/PercussionPanel.qml
+index 7e6a0d94..49a396af 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/PercussionPanel.qml
++++ b/src/notationscene/qml/MuseScore/NotationScene/PercussionPanel.qml
+@@ -35,6 +35,12 @@ Item {
+     property NavigationSection navigationSection: null
+     property int contentNavigationPanelOrderStart: 1
+ 
++    implicitWidth: Math.max(rowLayout.implicitWidth,
++                            soundTitleLabel.implicitWidth + soundTitleIcon.implicitWidth
++                            + soundTitleIcon.anchors.rightMargin + soundTitleLabel.anchors.rightMargin,
++                            panelDisabledLabel.visible ? panelDisabledLabel.implicitWidth : 0)
++    implicitHeight: soundTitleLabel.height + Math.max(rowLayout.height,
++                                                     panelDisabledLabel.visible ? panelDisabledLabel.implicitHeight : 0)
+     signal resizeRequested(var newWidth, var newHeight)
+ 
+     anchors.fill: parent
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/PianoKeyboardPanel.qml b/src/notationscene/qml/MuseScore/NotationScene/PianoKeyboardPanel.qml
 index 54eeb3b4..884047e0 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/PianoKeyboardPanel.qml
@@ -36709,6 +37233,168 @@ index 54eeb3b4..884047e0 100644
      property alias navigationSection: navPanel.section
      property alias contentNavigationPanelOrderStart: navPanel.order
  
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/SelectionFilterPanel.qml b/src/notationscene/qml/MuseScore/NotationScene/SelectionFilterPanel.qml
+index b5656331..ae4b3a4d 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/SelectionFilterPanel.qml
++++ b/src/notationscene/qml/MuseScore/NotationScene/SelectionFilterPanel.qml
+@@ -38,6 +38,10 @@ Item {
+     property NavigationSection navigationSection: null
+     property int navigationOrderStart: 0
+ 
++    implicitHeight: flickable.contentHeight + clearAllSelectAllRow.height + 12
++    implicitWidth: Math.max(voicesSection.naturalWidth, notesInChordSection.visible ? notesInChordSection.naturalWidth : 0,
++                            notationElementsSection.naturalWidth,
++                            clearAllbutton.implicitWidth + selectAllButton.implicitWidth + clearAllSelectAllRow.spacing) + 24
+     readonly property bool isAllSelected: notesInChordModel.isAllSelected && elementsModel.isAllSelected
+     readonly property bool isNoneSelected: notesInChordModel.isNoneSelected && elementsModel.isNoneSelected
+ 
+@@ -52,7 +56,7 @@ Item {
+ 
+         width: root.width
+ 
+-        contentWidth: flickable.width
++        contentWidth: Math.max(flickable.width, root.implicitWidth)
+         contentHeight: contentColumn.implicitHeight
+ 
+         Component.onCompleted: {
+@@ -67,7 +71,9 @@ Item {
+             readonly property real buttonHeight: 24
+ 
+             anchors {
+-                fill: parent
++                top: parent.top
++                left: parent.left
++                right: parent.right
+                 leftMargin: 12
+                 rightMargin: 12
+             }
+@@ -192,34 +198,31 @@ Item {
+                     direction: NavigationPanel.Vertical
+                 }
+ 
+-                StyledListView {
++                Column {
++                    id: elementsColumn
+                     width: parent.width
+-                    height: contentHeight
+ 
+                     spacing: notationElementsSection.spacing
+-                    clip: false
+-
+-                    model: ElementsSelectionFilterModel {
+-                        id: elementsModel
+-                    }
+-
+-                    interactive: false
+-
+-                    delegate: CheckBox {
+-                        required property var model
+-                        required property int index
++                    Repeater {
++                        model: ElementsSelectionFilterModel {
++                            id: elementsModel
++                        }
++                        delegate: CheckBox {
++                            required property var model
++                            required property int index
+ 
+-                        width: ListView.view.width
++                            width: elementsColumn.width
+ 
+-                        text: model.title
++                            text: model.title
+ 
+-                        navigation.panel: notationElementsSection.navigation
+-                        navigation.row: index
++                            navigation.panel: notationElementsSection.navigation
++                            navigation.row: index
+ 
+-                        checked: model.isSelected
+-                        isIndeterminate: model.isIndeterminate
+-                        onClicked: {
+-                            model.isSelected = !checked
++                            checked: model.isSelected
++                            isIndeterminate: model.isIndeterminate
++                            onClicked: {
++                                model.isSelected = !checked
++                            }
+                         }
+                     }
+                 }
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/Timeline.qml b/src/notationscene/qml/MuseScore/NotationScene/Timeline.qml
+index 3bad2db4..03552bb5 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/Timeline.qml
++++ b/src/notationscene/qml/MuseScore/NotationScene/Timeline.qml
+@@ -31,6 +31,8 @@ Item {
+     property alias navigationSection: navPanel.section
+     property alias contentNavigationPanelOrderStart: navPanel.order
+ 
++    implicitWidth: timelineView.implicitWidth
++    implicitHeight: timelineView.implicitHeight
+     NavigationPanel {
+         id: navPanel
+         name: "TimelineSection"
+@@ -39,6 +41,7 @@ Item {
+     }
+ 
+     TimelineView {
++        id: timelineView
+         anchors.fill: parent
+     }
+ }
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/UndoHistoryPanel.qml b/src/notationscene/qml/MuseScore/NotationScene/UndoHistoryPanel.qml
+index ab73f521..148d21e6 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/UndoHistoryPanel.qml
++++ b/src/notationscene/qml/MuseScore/NotationScene/UndoHistoryPanel.qml
+@@ -36,12 +36,40 @@ Item {
+     property var navigationSection: null
+     property int navigationOrderStart: 0
+ 
++    implicitWidth: measurementColumn.implicitWidth
++    implicitHeight: listView.count * rowSize.implicitHeight + Math.max(0, listView.count - 1) * listView.spacing
++    ListItemBlank {
++        id: rowSize
++        visible: false
++    }
++    Column {
++        id: measurementColumn
++        visible: false
++        Repeater {
++            model: undoHistoryModel
++            delegate: Item {
++                id: measurement
++                required property string text
++                required property int index
++                width: measuredText.implicitWidth + 12 + 16 + 6 + 12
++                height: rowSize.implicitHeight
++                StyledTextLabel {
++                    id: measuredText
++                    text: measurement.text
++                    font: measurement.index === undoHistoryModel.currentIndex ? ui.theme.bodyBoldFont
++                          : measurement.index > undoHistoryModel.currentIndex ? Qt.font(Object.assign({}, ui.theme.bodyFont, { italic: true }))
++                          : ui.theme.bodyFont
++                }
++            }
++        }
++    }
+     StyledListView {
+         id: listView
+ 
+         objectName: "Undo/redo history"
+ 
+         anchors.fill: parent
++        contentWidth: Math.max(width, root.implicitWidth)
+ 
+         currentIndex: undoHistoryModel.currentIndex
+ 
+@@ -58,6 +86,7 @@ Item {
+             required property string text
+             required property int index
+ 
++            width: listView.contentWidth
+             readonly property bool isRedoable: index > undoHistoryModel.currentIndex
+ 
+             isSelected: ListView.isCurrentItem
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/internal/NotationSwitchButton.qml b/src/notationscene/qml/MuseScore/NotationScene/internal/NotationSwitchButton.qml
 index cfb09f01..b6df284d 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/internal/NotationSwitchButton.qml
@@ -36745,6 +37431,275 @@ index 5367ca8e..117652b9 100644
  
                  navigation.name: "NotationTab" + index
                  navigation.panel: root.navigationPanel
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/internal/SelectionFilterSection.qml b/src/notationscene/qml/MuseScore/NotationScene/internal/SelectionFilterSection.qml
+index e043f701..6dd681b8 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/internal/SelectionFilterSection.qml
++++ b/src/notationscene/qml/MuseScore/NotationScene/internal/SelectionFilterSection.qml
+@@ -31,6 +31,13 @@ Column {
+     property alias navigation: navPanel
+     property alias sectionTitle: title.text
+ 
++    readonly property real naturalWidth: {
++        let result = title.implicitWidth
++        for (const child of children) {
++            result = Math.max(result, child.implicitWidth)
++        }
++        return result
++    }
+     width: parent.width
+     spacing: 8
+ 
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.cpp b/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.cpp
+index 5a19030e..479b87ae 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.cpp
++++ b/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.cpp
+@@ -21,6 +21,15 @@
+  */
+ #include "notationnavigator.h"
+ 
++#include <algorithm>
++#include <cmath>
++
++#include <QQuickWindow>
++#include <QScreen>
++
++#include "draw/painter.h"
++#include "notation/inotationpainting.h"
++
+ #include "log.h"
+ 
+ using namespace muse;
+@@ -52,6 +61,7 @@ NotationNavigator::NotationNavigator(QQuickItem* parent)
+     : AbstractNotationPaintView(parent), m_cursorRectView(new NotationNavigatorCursorView(this))
+ {
+     setReadonly(true);
++    connect(this, &QQuickItem::windowChanged, this, &NotationNavigator::observeWindow);
+ }
+ 
+ void NotationNavigator::load()
+@@ -60,6 +70,7 @@ void NotationNavigator::load()
+ 
+     initOrientation();
+     initVisible();
++    observeWindow(window());
+ 
+     uiConfiguration()->currentThemeChanged().onNotify(this, [this]() {
+         update();
+@@ -79,9 +90,24 @@ void NotationNavigator::load()
+ void NotationNavigator::onLoadNotation(INotationPtr notation)
+ {
+     AbstractNotationPaintView::onLoadNotation(notation);
++    if (m_fitFullContent) {
++        notation->notationChanged().onNotify(&m_contentReceiver, [this]() {
++            polish();
++        });
++        notation->viewModeChanged().onNotify(&m_contentReceiver, [this]() {
++            polish();
++        });
++    }
+     rescaleIfVisible();
+ }
+ 
++void NotationNavigator::onUnloadNotation(INotationPtr notation)
++{
++    notation->notationChanged().disconnect(&m_contentReceiver);
++    notation->viewModeChanged().disconnect(&m_contentReceiver);
++    AbstractNotationPaintView::onUnloadNotation(notation);
++}
++
+ bool NotationNavigator::isVerticalOrientation() const
+ {
+     return configuration()->canvasOrientation().val == muse::Orientation::Vertical;
+@@ -101,6 +127,10 @@ void NotationNavigator::rescaleIfVisible()
+ {
+     TRACEFUNC;
+ 
++    if (m_fitFullContent) {
++        polish();
++        return;
++    }
+     if (!isVisible() || size().isEmpty()) {
+         return;
+     }
+@@ -165,6 +195,9 @@ bool NotationNavigator::moveCanvasToRect(const RectF& viewRect)
+     TRACEFUNC;
+ 
+     RectF newViewRect = viewRect;
++    if (m_fitFullContent) {
++        return false;
++    }
+     RectF viewport = this->viewport();
+     RectF notationContentRect = this->notationContentRect();
+ 
+@@ -236,8 +269,9 @@ int NotationNavigator::orientation() const
+ void NotationNavigator::initOrientation()
+ {
+     ValCh<muse::Orientation> orientation = configuration()->canvasOrientation();
+-    orientation.ch.onReceive(this, [this](muse::Orientation) {
++    orientation.ch.onReceive(&m_contentReceiver, [this](muse::Orientation) {
+         moveCanvasToPosition(PointF(0, 0));
++        rescaleIfVisible();
+         emit orientationChanged();
+     });
+ 
+@@ -251,6 +285,36 @@ void NotationNavigator::initVisible()
+     });
+ }
+ 
++void NotationNavigator::observeWindow(QQuickWindow* viewWindow)
++{
++    for (const QMetaObject::Connection& connection : m_windowConnections) {
++        disconnect(connection);
++    }
++    m_windowConnections.clear();
++    observeScreen(m_fitFullContent && viewWindow ? viewWindow->screen() : nullptr);
++    if (!m_fitFullContent || !viewWindow) {
++        return;
++    }
++    m_windowConnections << connect(viewWindow, &QWindow::screenChanged, this, &NotationNavigator::observeScreen);
++    const auto refit = [this]() { polish(); };
++    m_windowConnections << connect(viewWindow, &QWindow::widthChanged, this, refit);
++    m_windowConnections << connect(viewWindow, &QWindow::heightChanged, this, refit);
++    m_windowConnections << connect(viewWindow, &QWindow::xChanged, this, refit);
++    m_windowConnections << connect(viewWindow, &QWindow::yChanged, this, refit);
++    m_windowConnections << connect(viewWindow, &QWindow::visibleChanged, this, refit);
++}
++
++void NotationNavigator::observeScreen(QScreen* screen)
++{
++    disconnect(m_screenConnection);
++    if (screen) {
++        m_screenConnection = connect(screen, &QScreen::availableGeometryChanged, this, [this]() {
++            polish();
++        });
++    }
++    polish();
++}
++
+ ViewMode NotationNavigator::notationViewMode() const
+ {
+     if (!notation()) {
+@@ -268,11 +332,59 @@ void NotationNavigator::paint(QPainter* painter)
+ 
+     TRACEFUNC;
+ 
+-    AbstractNotationPaintView::paint(painter);
++    if (m_fitFullContent) {
++        if (!notation()) {
++            return;
++        }
++        painter->fillRect(boundingRect(), configuration()->backgroundColor());
++        const QTransform fittedMatrix = matrix().value<QTransform>();
++        muse::draw::Painter scorePainter(painter, objectName().toStdString());
++        scorePainter.setWorldTransform(muse::draw::Transform::fromQTransform(fittedMatrix));
++        notation()->painting()->paintView(&scorePainter, viewport(), true);
++        painter->setWorldTransform(fittedMatrix);
++    } else {
++        AbstractNotationPaintView::paint(painter);
++    }
+ 
+     paintPageNumbers(painter);
+ }
+ 
++void NotationNavigator::updatePolish()
++{
++    if (!m_fitFullContent || !isVisible()) {
++        return;
++    }
++    const RectF content = notationContentRect();
++    if (!content.isValid() || !std::isfinite(content.width()) || !std::isfinite(content.height())) {
++        return;
++    }
++    qreal scaling = 1.0;
++    if (const QQuickWindow* viewWindow = window()) {
++        if (const QScreen* screen = viewWindow->screen()) {
++            const QMargins margins = viewWindow->frameMargins();
++            const QSize available = screen->availableGeometry().size();
++            const qreal extraWidth = std::max(qreal(0.0), viewWindow->width() - width()) + margins.left() + margins.right();
++            const qreal extraHeight = std::max(qreal(0.0), viewWindow->height() - height()) + margins.top() + margins.bottom();
++            const qreal availableWidth = std::max(qreal(1.0), std::floor(available.width() - extraWidth));
++            const qreal availableHeight = std::max(qreal(1.0), std::floor(available.height() - extraHeight));
++            scaling = std::min({ scaling, availableWidth / content.width(), availableHeight / content.height() });
++        }
++    }
++    const qreal fittedWidth = content.width() * scaling;
++    const qreal fittedHeight = content.height() * scaling;
++    setImplicitSize(std::ceil(fittedWidth), std::ceil(fittedHeight));
++    if (size().isEmpty()) {
++        return;
++    }
++    muse::draw::Transform matrix;
++    matrix.translate((width() - fittedWidth) / 2, (height() - fittedHeight) / 2);
++    matrix.scale(scaling, scaling);
++    matrix.translate(-content.left(), -content.top());
++    setMatrix(matrix);
++    setCursorRect(m_cursorRect.toQRectF());
++    update();
++}
++
+ void NotationNavigator::onViewSizeChanged()
+ {
+     rescaleIfVisible();
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.h b/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.h
+index 57f10029..d7e60e4b 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.h
++++ b/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.h
+@@ -22,6 +22,7 @@
+ 
+ #pragma once
+ 
++#include <QList>
+ #include <QObject>
+ #include <QMouseEvent>
+ #include <QPainter>
+@@ -36,6 +37,8 @@
+ #include "engraving/iengravingconfiguration.h"
+ #include "abstractnotationpaintview.h"
+ 
++class QScreen;
++
+ namespace mu::notation {
+ class NotationNavigatorCursorView : public QQuickPaintedItem, public muse::Contextable
+ {
+@@ -59,6 +62,7 @@ class NotationNavigator : public AbstractNotationPaintView
+     Q_OBJECT
+ 
+     Q_PROPERTY(int orientation READ orientation NOTIFY orientationChanged)
++    Q_PROPERTY(bool fitFullContent MEMBER m_fitFullContent)
+ 
+     QML_ELEMENT;
+ 
+@@ -81,15 +85,19 @@ signals:
+ 
+ private:
+     void onLoadNotation(INotationPtr notation) override;
++    void onUnloadNotation(INotationPtr notation) override;
+ 
+     void initOrientation();
+     void initVisible();
++    void observeWindow(QQuickWindow* viewWindow);
++    void observeScreen(QScreen* screen);
+ 
+     ViewMode notationViewMode() const;
+ 
+     void rescaleIfVisible();
+ 
+     void paint(QPainter* painter) override;
++    void updatePolish() override;
+     void onViewSizeChanged() override;
+ 
+     void wheelEvent(QWheelEvent* event) override;
+@@ -104,6 +112,10 @@ private:
+ 
+     const PageList& pages() const;
+ 
++    bool m_fitFullContent = false;
++    muse::async::Asyncable m_contentReceiver;
++    QList<QMetaObject::Connection> m_windowConnections;
++    QMetaObject::Connection m_screenConnection;
+     muse::RectF m_cursorRect;
+     NotationNavigatorCursorView* m_cursorRectView = nullptr;
+     muse::PointF m_startMove;
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/notationswitchlistmodel.cpp b/src/notationscene/qml/MuseScore/NotationScene/notationswitchlistmodel.cpp
 index a47bb869..74ace452 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/notationswitchlistmodel.cpp
@@ -37901,6 +38856,70 @@ index 13b9bfe3..170355b5 100644
 +    EXPECT_EQ(m_controller->keyPlaybackLayer(64), 2u);
 +}
 +}
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/timelineview.cpp b/src/notationscene/qml/MuseScore/NotationScene/timelineview.cpp
+index ac709ba0..a8da44a1 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/timelineview.cpp
++++ b/src/notationscene/qml/MuseScore/NotationScene/timelineview.cpp
+@@ -26,6 +26,7 @@
+ 
+ #include <QApplication>
+ #include <QQuickWindow>
++#include <QScrollBar>
+ #include <QSplitter>
+ #include <QTimer>
+ 
+@@ -46,6 +47,18 @@ public:
+         m_msTimeline = new Timeline(this, iocCtx);
+     }
+ 
++    QSizeF contentSize() const
++    {
++        const auto* labels = m_msTimeline->labelsColumn();
++        const auto* horizontal = m_msTimeline->horizontalScrollBar();
++        const auto* vertical = m_msTimeline->verticalScrollBar();
++        const int horizontalHeight = horizontal->isHidden() ? 0 : horizontal->sizeHint().height();
++        const int verticalWidth = vertical->isHidden() ? 0 : vertical->sizeHint().width();
++        return QSizeF(labels->maximumWidth() + m_msTimeline->sceneRect().width()
++                      + 2 * m_msTimeline->frameWidth() + verticalWidth,
++                      m_msTimeline->sceneRect().height() + 2 * m_msTimeline->frameWidth() + horizontalHeight);
++    }
++
+     void updateView()
+     {
+         m_msTimeline->updateGridFromCmdState();
+@@ -116,6 +129,10 @@ TimelineView::TimelineView(QQuickItem* parent)
+ void TimelineView::doDraw()
+ {
+     if (isVisible()) {
++        if (auto* timeline = dynamic_cast<TimelineAdapter*>(qWidget())) {
++            const QSizeF contentSize = timeline->contentSize();
++            setImplicitSize(contentSize.width(), contentSize.height());
++        }
+         m_dpr =  window() ? window()->devicePixelRatio() : 1.0;
+ 
+         m_image = QImage(width() * m_dpr, height() * m_dpr, QImage::Format_ARGB32_Premultiplied);
+diff --git a/src/notationscene/widgets/timeline.cpp b/src/notationscene/widgets/timeline.cpp
+index 9f7cbdd5..8e0e9c16 100644
+--- a/src/notationscene/widgets/timeline.cpp
++++ b/src/notationscene/widgets/timeline.cpp
+@@ -416,7 +416,7 @@ void TRowLabels::updateLabels(std::vector<std::pair<QString, bool> > labels, int
+     std::pair<QGraphicsItem*, int> graphicsLineItemPair = std::make_pair(graphicsLineItem, numMetas);
+     _metaLabels.push_back(graphicsLineItemPair);
+ 
+-    setSceneRect(0, 0, maxWidth, _timeline->getHeight() + _timeline->horizontalScrollBar()->height());
++    setSceneRect(0, 0, maxWidth, _timeline->getHeight());
+ 
+     std::tuple<QGraphicsPixmapItem*, MouseOverValue, unsigned> tmp(nullptr, MouseOverValue::NONE, -1);
+     _oldItemInfo = tmp;
+@@ -1000,7 +1000,7 @@ void Timeline::drawGrid(int globalRows, int globalCols, int startMeasure, int en
+     }
+ 
+     int stagger = 0;
+-    setMinimumHeight(_gridHeight * (numMetas + 1) + 5 + horizontalScrollBar()->height());
++    setMinimumHeight(0);
+     setMinimumWidth(_gridWidth * 3);
+     _globalZValue = 1;
+ 
 diff --git a/src/palette/internal/paletteactionscontroller.cpp b/src/palette/internal/paletteactionscontroller.cpp
 index 4e607210..f42dc2a8 100644
 --- a/src/palette/internal/paletteactionscontroller.cpp
@@ -37918,6 +38937,126 @@ index 4e607210..f42dc2a8 100644
  }
  
  void PaletteActionsController::init()
+diff --git a/src/palette/qml/MuseScore/Palette/DrumsetPanel.qml b/src/palette/qml/MuseScore/Palette/DrumsetPanel.qml
+index b0659d9f..752dbd6e 100644
+--- a/src/palette/qml/MuseScore/Palette/DrumsetPanel.qml
++++ b/src/palette/qml/MuseScore/Palette/DrumsetPanel.qml
+@@ -32,6 +32,8 @@ Item {
+     property alias navigationSection: navPanel.section
+     property alias contentNavigationPanelOrderStart: navPanel.order
+ 
++    implicitWidth: contentRow.implicitWidth + contentRow.anchors.leftMargin + contentRow.anchors.rightMargin
++    implicitHeight: contentRow.implicitHeight
+     NavigationPanel {
+         id: navPanel
+         name: "DrumsetSection"
+@@ -40,6 +42,7 @@ Item {
+     }
+ 
+     RowLayout {
++        id: contentRow
+         anchors.fill: parent
+         anchors.leftMargin: 12
+         anchors.rightMargin: 8
+@@ -55,7 +58,7 @@ Item {
+                 anchors.horizontalCenter: parent.horizontalCenter
+ 
+                 height: 20
+-                width: customizeKitButton.width
++                width: Math.max(implicitWidth, customizeKitButton.implicitWidth)
+ 
+                 text: drumsetView.pitchName
+             }
+diff --git a/src/palette/qml/MuseScore/Palette/PalettesPanel.qml b/src/palette/qml/MuseScore/Palette/PalettesPanel.qml
+index 1c2f0729..dab5a1c1 100644
+--- a/src/palette/qml/MuseScore/Palette/PalettesPanel.qml
++++ b/src/palette/qml/MuseScore/Palette/PalettesPanel.qml
+@@ -39,8 +39,10 @@ Item {
+ 
+     readonly property PaletteProvider paletteProvider: paletteRootModel.paletteProvider
+ 
+-    implicitHeight: 4 * palettesPanelHeader.implicitHeight
+-    implicitWidth: paletteTree.implicitWidth
++    implicitHeight: palettesPanelHeader.implicitHeight + contentColumn.spacing
++                    + (searchHint.visible ? searchHint.implicitHeight
++                       : notFoundHint.visible ? notFoundHint.implicitHeight : paletteTree.contentHeight)
++    implicitWidth: Math.max(paletteTree.implicitWidth, palettesPanelHeader.implicitWidth + 2 * contentColumn.sideMargin)
+ 
+     function applyCurrentPaletteElement() {
+         paletteTree.applyCurrentElement();
+diff --git a/src/palette/qml/MuseScore/Palette/internal/PaletteTree.qml b/src/palette/qml/MuseScore/Palette/internal/PaletteTree.qml
+index 71469413..116e80f2 100644
+--- a/src/palette/qml/MuseScore/Palette/internal/PaletteTree.qml
++++ b/src/palette/qml/MuseScore/Palette/internal/PaletteTree.qml
+@@ -57,6 +57,18 @@ StyledListView {
+     highlightRangeMode: itemDragged ? ListView.ApplyRange : ListView.NoHighlightRange
+ 
+     cacheBuffer: 3000
++    contentWidth: Math.max(width, implicitWidth)
++    displayMarginBeginning: contentHeight
++    displayMarginEnd: contentHeight
++    implicitWidth: {
++        let result = 0
++        for (const child of contentItem.children) {
++            if (child.naturalWidth !== undefined) {
++                result = Math.max(result, child.naturalWidth)
++            }
++        }
++        return result
++    }
+ 
+     NavigationPanel {
+         id: keynavTree
+@@ -416,10 +428,9 @@ StyledListView {
+                 }
+             }
+ 
+-            Component.onCompleted: {
+-                const w = paletteHeader.implicitWidth + leftPadding + rightPadding;
+-                paletteTree.implicitWidth = Math.max(paletteTree.implicitWidth, w);
+-            }
++            readonly property real naturalWidth: Math.max(paletteHeader.implicitWidth,
++                                                         cellSize.width + 2 * mainPaletteContainer.padding)
++                                                 + leftPadding + rightPadding
+ 
+             Component.onDestruction: {
+                 if (palettePopup.active && palettePopup.model === model) {
+@@ -553,7 +564,7 @@ StyledListView {
+                                             : model.expanded ? qsTrc("palette", "%1 expanded", "tree item not collapsed").arg(model.accessibleText)
+                                                              : model.accessibleText
+ 
+-            width: ListView.view.width
++            width: paletteTree.contentWidth
+ 
+             Drag.active: paletteTree.paletteProvider.isPaletteDragEnabled && paletteHeaderDragArea.drag.active
+             Drag.dragType: Drag.Automatic
+diff --git a/src/palette/qml/MuseScore/Palette/internal/PalettesPanelHeader.qml b/src/palette/qml/MuseScore/Palette/internal/PalettesPanelHeader.qml
+index b625600d..37ca957e 100644
+--- a/src/palette/qml/MuseScore/Palette/internal/PalettesPanelHeader.qml
++++ b/src/palette/qml/MuseScore/Palette/internal/PalettesPanelHeader.qml
+@@ -44,6 +44,8 @@ Item {
+     signal addCustomPaletteRequested(var paletteName)
+ 
+     implicitHeight: childrenRect.height
++    implicitWidth: isSearchOpened ? searchField.implicitWidth : addPalettesButton.implicitWidth + addPalettesButton.anchors.rightMargin
++                   + startSearchButton.implicitWidth
+ 
+     function startSearch() {
+         isSearchOpened = true
+diff --git a/src/palette/qml/MuseScore/Palette/internal/drumsetpanelview.cpp b/src/palette/qml/MuseScore/Palette/internal/drumsetpanelview.cpp
+index 65cb7c67..9ac86447 100644
+--- a/src/palette/qml/MuseScore/Palette/internal/drumsetpanelview.cpp
++++ b/src/palette/qml/MuseScore/Palette/internal/drumsetpanelview.cpp
+@@ -118,6 +118,9 @@ void DrumsetPanelView::initDrumsetPalette()
+ {
+     auto updateView = [this]() {
+         m_adapter->updateDrumset();
++        const PaletteWidget* palette = m_adapter->drumsetPalette()->paletteWidget();
++        const int contentWidth = qMax(1, palette->actualCellCount()) * palette->gridWidthScaled();
++        setImplicitSize(contentWidth + 6, palette->heightForWidth(contentWidth) + 6);
+         update();
+     };
+ 
 diff --git a/src/playback/CMakeLists.txt b/src/playback/CMakeLists.txt
 index 26f239ab..86c1e5be 100644
 --- a/src/playback/CMakeLists.txt
