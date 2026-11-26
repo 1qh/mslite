@@ -164,7 +164,9 @@ checks() {
   commit=$(git -C "${HERE}" rev-parse HEAD)
   printf '%s\n%s\n%s\n' "${commit}" "${MSCORE_CHECK_REMOTE_SCORE}" "$2" | ssh "${MSCORE_CHECK_HOST}" sh muse/mslite/tools/remote-checks.sh
 }
-gates applebuild/mscore.app
+# the unpackaged app loads Qt and the dependencies from this Mac's own folders, so another Mac can only check the packaged
+# app; in that case the 4 gates run once, after packaging, beside the features
+[ -n "${MSCORE_CHECK_HOST:-}" ] || gates applebuild/mscore.app
 
 KEY_ID=$(cat "${MSCORE_SECRETS}/asc-api-key-id.txt")
 ISSUER=$(cat "${MSCORE_SECRETS}/asc-api-issuer-id.txt")
