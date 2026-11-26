@@ -8,6 +8,7 @@ deadline=$(($(date +%s) + 10))
 while kill -0 "${PID}" 2> /dev/null; do
   now=$(date +%s)
   if [ "${now}" -gt "${deadline}" ]; then
+    echo "quit-app: ${PID} ignored its quit for 10 s and was killed" >&2
     kill "${PID}" 2> /dev/null
     break
   fi
