@@ -11,7 +11,8 @@ set -eu
 BINARY=$1
 LAUNCHES=$2
 shift 2
-HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+script_dir=$(dirname -- "$0")
+HERE=$(CDPATH='' cd -- "${script_dir}/.." && pwd)
 sh "${HERE}/tools/test-app.sh" "${BINARY}" "$@"
 wrong=0
 readings=0
@@ -24,9 +25,11 @@ for score in "$@"; do
     fresh=$(mktemp -d)
     HOME="${fresh}" TMPDIR="${fresh}" "${BINARY}" "${score}" < /dev/null > /dev/null 2>&1 &
     pid=$!
-    deadline=$(($(date +%s) + 60))
+    now=$(date +%s)
+    deadline=$((now + 60))
     until swift "${HERE}/tools/windows.swift" "${pid}" | grep -q "onscreen=true"; do
-      [ "$(date +%s)" -le "${deadline}" ] || {
+      now=$(date +%s)
+      [ "${now}" -le "${deadline}" ] || {
         echo "${want} launch ${launch}: no window within 60 s"
         wrong=$((wrong + 1))
         break

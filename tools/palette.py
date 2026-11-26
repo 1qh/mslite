@@ -1,4 +1,6 @@
-"""Derive the piano key layer colours: Okabe-Ito and Kelly's maximum-contrast colours, kept only when bright enough to
+"""Derive the piano key layer colours.
+
+Derive the piano key layer colours: Okabe-Ito and Kelly's maximum-contrast colours, kept only when bright enough to
 read on a black key and saturated enough to read on a white one, then ordered so no 2 neighbours are close in hue.
 
 usage: python3 palette.py
@@ -10,8 +12,26 @@ import sys
 
 OKABE_ITO = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7"]
 KELLY = [
-    "#F3C300", "#875692", "#F38400", "#A1CAF1", "#BE0032", "#C2B280", "#848482", "#008856", "#E68FAC", "#0067A5",
-    "#F99379", "#604E97", "#F6A600", "#B3446C", "#DCD300", "#882D17", "#8DB600", "#654522", "#E25822", "#2B3D26",
+    "#F3C300",
+    "#875692",
+    "#F38400",
+    "#A1CAF1",
+    "#BE0032",
+    "#C2B280",
+    "#848482",
+    "#008856",
+    "#E68FAC",
+    "#0067A5",
+    "#F99379",
+    "#604E97",
+    "#F6A600",
+    "#B3446C",
+    "#DCD300",
+    "#882D17",
+    "#8DB600",
+    "#654522",
+    "#E25822",
+    "#2B3D26",
 ]
 MIN_LUMINANCE = 0.2
 MIN_SATURATION = 0.4
@@ -31,7 +51,7 @@ def channel(value: float) -> float:
         Its linear-light value.
 
     """
-    return value / SRGB_SLOPE if value <= SRGB_KNEE else ((value + 0.055) / 1.055) ** SRGB_GAMMA
+    return float(value / SRGB_SLOPE if value <= SRGB_KNEE else ((value + 0.055) / 1.055) ** SRGB_GAMMA)
 
 
 def measure(colour: str) -> tuple[float, float, float]:

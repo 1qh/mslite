@@ -6,11 +6,13 @@ set -eu
 SRC=$1
 HERE=$2
 cd "${SRC}"
-[ "$(git log --format=%s -1)" = "muse: patch set and release script" ] || {
+subject=$(git log --format=%s -1)
+[ "${subject}" = "muse: patch set and release script" ] || {
   echo "the top commit of ${SRC} is not the patch-set commit" >&2
   exit 1
 }
-[ "$(git log --format=%s -1 HEAD~1)" = "muse: debloat" ] || {
+subject=$(git log --format=%s -1 HEAD~1)
+[ "${subject}" = "muse: debloat" ] || {
   echo "the commit under the patch set in ${SRC} is not the debloat commit" >&2
   exit 1
 }
@@ -28,7 +30,8 @@ for patch in serve piano-playback packaging flat-picker debloat; do
     exit 1
   }
 done
-[ -z "$(git status --porcelain -- src patches)" ] || {
+tree_status=$(git status --porcelain -- src patches)
+[ -z "${tree_status}" ] || {
   echo "source changes remain uncommitted in ${SRC}" >&2
   exit 1
 }

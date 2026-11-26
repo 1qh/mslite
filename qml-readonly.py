@@ -50,8 +50,9 @@ def assignments(text: str) -> list[int]:
         if IMPLICIT_SIZE.match(stripped) and stack and stack[-1] in POSITIONERS:
             found.append(number)
         opened = OBJECT_OPEN.match(stripped)
-        for index in range(stripped.count("{")):
-            stack.append(opened.group(1).split(".")[-1] if opened and index == 0 else None)
+        stack.extend(
+            opened.group(1).split(".")[-1] if opened and index == 0 else None for index in range(stripped.count("{"))
+        )
         for _ in range(stripped.count("}")):
             if stack:
                 stack.pop()

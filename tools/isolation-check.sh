@@ -11,16 +11,19 @@ set -eu
 }
 BINARY=$1
 SCORE=$2
-HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+script_dir=$(dirname -- "$0")
+HERE=$(CDPATH='' cd -- "${script_dir}/.." && pwd)
 sh "${HERE}/tools/test-app.sh" "${BINARY}" "${SCORE}"
 LISTENER_HOME=$(mktemp -d)
 SHARED_HOME=$(mktemp -d)
 HOME="${LISTENER_HOME}" "${BINARY}" "${SCORE}" < /dev/null > /dev/null 2>&1 &
 LISTENER=$!
-deadline=$(($(date +%s) + 60))
+now=$(date +%s)
+deadline=$((now + 60))
 log=""
 while [ -z "${log}" ]; do
-  [ "$(date +%s)" -le "${deadline}" ] || {
+  now=$(date +%s)
+  [ "${now}" -le "${deadline}" ] || {
     echo "the listening copy wrote no log within 60 s" >&2
     kill "${LISTENER}" 2> /dev/null || true
     exit 1

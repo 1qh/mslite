@@ -10,15 +10,20 @@ set -eu
 }
 APP=$1
 SCORE=$2
-HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+script_dir=$(dirname -- "$0")
+HERE=$(CDPATH='' cd -- "${script_dir}/.." && pwd)
 sh "${HERE}/tools/test-app.sh" "${APP}/Contents/MacOS/mscore" "${SCORE}"
 FRESH=$(mktemp -d)
 windows() { swift "${HERE}/tools/windows.swift" "$1" | awk '$1 == "layer" && $2 == 0 && $4 == "onscreen=true"' | grep -c . || true; }
 HOME="${FRESH}" TMPDIR="${FRESH}" "${APP}/Contents/MacOS/mscore" "${SCORE}" < /dev/null > /dev/null 2>&1 &
 PID=$!
-deadline=$(($(date +%s) + 60))
-until [ "$(windows "${PID}")" -ge 1 ]; do
-  [ "$(date +%s)" -le "${deadline}" ] || {
+now=$(date +%s)
+deadline=$((now + 60))
+while :; do
+  window_count=$(windows "${PID}")
+  [ "${window_count}" -lt 1 ] || break
+  now=$(date +%s)
+  [ "${now}" -le "${deadline}" ] || {
     echo "no window within 60 s" >&2
     kill "${PID}" 2> /dev/null || true
     exit 1
@@ -26,22 +31,28 @@ until [ "$(windows "${PID}")" -ge 1 ]; do
   sleep 1
 done
 sleep 5
-echo "before close: $(windows "${PID}") window"
+window_count=$(windows "${PID}")
+echo "before close: ${window_count} window"
 osascript -e "tell application \"System Events\" to tell (first process whose unix id is ${PID}) to click (first button of window 1 whose subrole is \"AXCloseButton\")" > /dev/null
 sleep 5
 if kill -0 "${PID}" 2> /dev/null; then
-  echo "after close: process alive, $(windows "${PID}") window"
+  window_count=$(windows "${PID}")
+  echo "after close: process alive, ${window_count} window"
 else
   echo "after close: process exited"
 fi
-[ -s "${FRESH}/mslite/session" ] && echo "session file left: $(head -c 300 "${FRESH}/mslite/session"/* 2> /dev/null | tr '\n' ' ')"
+if [ -s "${FRESH}/mslite/session" ]; then
+  session=$(head -c 300 "${FRESH}/mslite/session"/* 2> /dev/null | tr '\n' ' ')
+  echo "session file left: ${session}"
+fi
 find "${FRESH}/mslite" -mindepth 1 -maxdepth 1 -exec basename {} \; | tr '\n' ' '
 echo
 HOME="${FRESH}" TMPDIR="${FRESH}" "${APP}/Contents/MacOS/mscore" < /dev/null > /dev/null 2>&1 &
 AGAIN=$!
 sleep 15
 if kill -0 "${AGAIN}" 2> /dev/null; then
-  echo "reopen: process alive, $(windows "${AGAIN}") window"
+  window_count=$(windows "${AGAIN}")
+  echo "reopen: process alive, ${window_count} window"
   swift "${HERE}/tools/windows.swift" "${AGAIN}" | grep "onscreen=true" || true
   sh "${HERE}/quit-app.sh" "${AGAIN}" && echo "reopen: quit cleanly" || echo "reopen: ignored its quit, a dialog was holding it"
 else

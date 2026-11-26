@@ -14,7 +14,8 @@ SRC=$1
 OUT=$2
 QT=$3
 DEPS=$4
-HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+script_dir=$(dirname -- "$0")
+HERE=$(CDPATH='' cd -- "${script_dir}/.." && pwd)
 LEAN=$(sed -n 's/^LEAN="\(.*\)"$/\1/p' "${HERE}/release.sh")
 [ -n "${LEAN}" ] || {
   echo "no LEAN options found in release.sh" >&2
@@ -37,13 +38,16 @@ for target in ${TARGETS}; do
     if [ -z "${binary}" ]; then
       echo "${target}: built, binary not found"
       status=1
-    elif (cd "$(dirname "${binary}")" && "${binary}" > "${OUT}.${target}.run.log" 2>&1 < /dev/null); then
-      echo "${target}: $(grep -E '^\[  PASSED  \]' "${OUT}.${target}.run.log" | tail -1)"
+    elif (binary_dir=$(dirname "${binary}") && cd "${binary_dir}" && "${binary}" > "${OUT}.${target}.run.log" 2>&1 < /dev/null); then
+      passed=$(grep -E '^\[  PASSED  \]' "${OUT}.${target}.run.log" | tail -1)
+      echo "${target}: ${passed}"
     else
       failed=$(grep -E '^\[  FAILED  \] [A-Za-z0-9_]+\.[A-Za-z0-9_]+$' "${OUT}.${target}.run.log" | awk '{print $NF}' | sort -u)
       new=$(printf '%s\n' "${failed}" | grep -vxF -f "${KNOWN}" | grep . || true)
       if [ -n "${failed}" ] && [ -z "${new}" ]; then
-        echo "${target}: $(grep -E '^\[  PASSED  \]' "${OUT}.${target}.run.log" | tail -1), and only the $(printf '%s\n' "${failed}" | wc -l | tr -d ' ') failures upstream shares"
+        passed=$(grep -E '^\[  PASSED  \]' "${OUT}.${target}.run.log" | tail -1)
+        failure_count=$(printf '%s\n' "${failed}" | wc -l | tr -d ' ')
+        echo "${target}: ${passed}, and only the ${failure_count} failures upstream shares"
       else
         echo "${target}: FAILED: ${new:-the binary exited non-zero with no failed test named}" | tr '\n' ' '
         echo
@@ -51,7 +55,8 @@ for target in ${TARGETS}; do
       fi
     fi
   else
-    echo "${target}: does not build: $(grep -m3 ' error: ' "${OUT}.${target}.build.log" | tr '\n' ' ')"
+    errors=$(grep -m3 ' error: ' "${OUT}.${target}.build.log" | tr '\n' ' ')
+    echo "${target}: does not build: ${errors}"
     status=1
   fi
 done
