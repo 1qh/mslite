@@ -39858,7 +39858,7 @@ index 4aedde8e..acd5fa5d 100644
  
      muse::async::Channel<bool> m_muteHiddenInstrumentsChanged;
 diff --git a/src/playback/internal/playbackcontroller.cpp b/src/playback/internal/playbackcontroller.cpp
-index e8bc8f81..899dcdbc 100644
+index e8bc8f81..fa5d9645 100644
 --- a/src/playback/internal/playbackcontroller.cpp
 +++ b/src/playback/internal/playbackcontroller.cpp
 @@ -20,11 +20,11 @@
@@ -40029,11 +40029,9 @@ index e8bc8f81..899dcdbc 100644
  }
  
  void PlaybackController::addTrack(const InstrumentTrackId& instrumentTrackId, bool projectHadNoAudioSettings,
-@@ -1162,14 +1093,11 @@ void PlaybackController::doAddTrack(const InstrumentTrackId& instrumentTrackId,
- 
+@@ -1163,13 +1094,8 @@ void PlaybackController::doAddTrack(const InstrumentTrackId& instrumentTrackId,
      bool isMetronome = notationPlayback()->metronomeTrackId() == instrumentTrackId;
  
-+    bool usedRememberedInput = false;
      if (!inParams.isValid()) {
 -        if (isMetronome) {
 -            const SoundProfile& profile = profilesRepo()->profile(configuration()->basicSoundProfileName());
@@ -40044,19 +40042,22 @@ index e8bc8f81..899dcdbc 100644
 -        }
 +        inParams = configuration()->rememberedTrackInputParams(
 +            detail::rememberedInputSlot(instrumentTrackId, *notationPlayback(), *masterNotationParts()));
-+        usedRememberedInput = inParams.isValid();
      }
  
      if (!isMetronome && outParams.auxSends.empty()) {
-@@ -1195,7 +1123,7 @@ void PlaybackController::doAddTrack(const InstrumentTrackId& instrumentTrackId,
+@@ -1195,8 +1121,10 @@ void PlaybackController::doAddTrack(const InstrumentTrackId& instrumentTrackId,
          m_instrumentTrackIdMap.insert({ instrumentTrackId, trackId });
  
          const bool trackNewlyAdded = projectHadNoAudioSettings || !audioSettings()->trackHasExistingOutputParams(instrumentTrackId);
 -        audioSettings()->setTrackInputParams(instrumentTrackId, appliedParams.in, !projectHadNoAudioSettings);
-+        audioSettings()->setTrackInputParams(instrumentTrackId, appliedParams.in, !projectHadNoAudioSettings && !usedRememberedInput);
-         audioSettings()->setTrackOutputParams(instrumentTrackId, appliedParams.out, !projectHadNoAudioSettings);
+-        audioSettings()->setTrackOutputParams(instrumentTrackId, appliedParams.out, !projectHadNoAudioSettings);
++        //! NOTE What the engine applies while a track is added is no edit of the score, even where it differs from what
++        //! the score saved (a remembered pick, a sound no longer installed), so it never asks the owner to save on close
++        audioSettings()->setTrackInputParams(instrumentTrackId, appliedParams.in, false);
++        audioSettings()->setTrackOutputParams(instrumentTrackId, appliedParams.out, false);
  
          updateSoloMuteStates();
+ 
 @@ -1211,14 +1139,6 @@ void PlaybackController::doAddTrack(const InstrumentTrackId& instrumentTrackId,
          if (shouldLoadDrumset(instrumentTrackId, originMeta, appliedParams.in.resourceMeta)) {
              m_drumsetLoader.loadDrumset(m_notation, instrumentTrackId, appliedParams.in.resourceMeta);
@@ -40072,6 +40073,24 @@ index e8bc8f81..899dcdbc 100644
      })
      .onReject(this, [instrumentTrackId, onFinished](int code, const std::string& msg) {
          LOGE() << "can't add a new track, code: [" << code << "] " << msg;
+@@ -1229,7 +1149,7 @@ void PlaybackController::doAddTrack(const InstrumentTrackId& instrumentTrackId,
+     m_loadingTrackCount++;
+ }
+ 
+-void PlaybackController::addAuxTrack(aux_channel_idx_t index, bool projectHadNoAudioSettings, const TrackAddFinished& onFinished)
++void PlaybackController::addAuxTrack(aux_channel_idx_t index, const TrackAddFinished& onFinished)
+ {
+     IF_ASSERT_FAILED(notationPlayback() && playback()) {
+         return;
+@@ -1256,7 +1176,7 @@ void PlaybackController::addAuxTrack(aux_channel_idx_t index, bool projectHadNoA
+ 
+         m_auxTrackIdMap.insert({ index, trackId });
+ 
+-        audioSettings()->setAuxOutputParams(index, appliedParams, !projectHadNoAudioSettings);
++        audioSettings()->setAuxOutputParams(index, appliedParams, false);
+ 
+         updateSoloMuteStates();
+         onFinished();
 @@ -1328,8 +1248,6 @@ void PlaybackController::removeTrack(const InstrumentTrackId& instrumentTrackId)
          }
      }
@@ -40104,6 +40123,15 @@ index e8bc8f81..899dcdbc 100644
          }
      });
  }
+@@ -1469,7 +1379,7 @@ void PlaybackController::setupSequenceTracks()
+     }
+ 
+     for (aux_channel_idx_t idx = 0; idx < AUX_CHANNEL_NUM; ++idx) {
+-        addAuxTrack(idx, projectHadNoAudioSettings, onAddFinished);
++        addAuxTrack(idx, onAddFinished);
+     }
+ 
+     m_loadingProgress.progress(0, trackCount, title);
 @@ -1823,9 +1733,7 @@ bool PlaybackController::canReceiveAction(const ActionCode& code) const
          return false;
      }
@@ -40138,7 +40166,7 @@ index e8bc8f81..899dcdbc 100644
  {
      return secs_t(notationPlayback()->playedTickToSec(tick));
 diff --git a/src/playback/internal/playbackcontroller.h b/src/playback/internal/playbackcontroller.h
-index 2a6d7c78..ee53175f 100644
+index 2a6d7c78..5ac04707 100644
 --- a/src/playback/internal/playbackcontroller.h
 +++ b/src/playback/internal/playbackcontroller.h
 @@ -35,34 +35,15 @@
@@ -40211,6 +40239,15 @@ index 2a6d7c78..ee53175f 100644
  
  private:
      muse::audio::IPlayerPtr currentPlayer() const;
+@@ -242,7 +215,7 @@ private:
+                   const TrackAddFinished& onFinished);
+     void doAddTrack(const engraving::InstrumentTrackId& instrumentTrackId, const std::string& title, bool projectHadNoAudioSettings,
+                     const TrackAddFinished& onFinished);
+-    void addAuxTrack(muse::audio::aux_channel_idx_t index, bool projectHadNoAudioSettings, const TrackAddFinished& onFinished);
++    void addAuxTrack(muse::audio::aux_channel_idx_t index, const TrackAddFinished& onFinished);
+ 
+     void setTrackActivity(const engraving::InstrumentTrackId& instrumentTrackId, const bool isActive);
+     muse::audio::AudioOutputParams trackOutputParams(const engraving::InstrumentTrackId& instrumentTrackId) const;
 @@ -273,8 +246,6 @@ private:
      muse::async::Channel<muse::audio::TrackId> m_trackRemoved;
      muse::async::Channel<bool> m_playbackInitedChanged;

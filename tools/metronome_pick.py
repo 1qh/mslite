@@ -22,6 +22,7 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 ARGC = 3
 LOG_WAIT_SECONDS = 60
 SETTLE_SECONDS = 15
+QUIT_WAIT_SECONDS = 10
 METRONOME_PART = "999"
 METRONOME_INSTRUMENT = "metronome"
 
@@ -89,23 +90,50 @@ def launch_log(binary: pathlib.Path, score: pathlib.Path) -> tuple[str, bool]:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        swift = shutil.which("swift") or "swift"
         deadline = time.monotonic() + LOG_WAIT_SECONDS
-        logs: list[pathlib.Path] = []
-        while not logs and time.monotonic() < deadline and process.poll() is None:
-            logs = sorted((home / "mslite" / "logs").glob("*.log"))
-            time.sleep(1)
+        shown = False
+        while not shown and time.monotonic() < deadline and process.poll() is None:
+            listing = subprocess.run(
+                [swift, str(HERE / "tools" / "windows.swift"), str(process.pid)],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
+            shown = any(line.startswith("layer 0 ") and "onscreen=true" in line for line in listing.splitlines())
+            if not shown:
+                time.sleep(1)
+        if not shown:
+            subprocess.run([shutil.which("sh") or "sh", str(HERE / "quit-app.sh"), str(process.pid)], check=False)
+            msg = f"the app showed no score window within {LOG_WAIT_SECONDS} s"
+            raise RuntimeError(msg)
         time.sleep(SETTLE_SECONDS)
+        logs = sorted((home / "mslite" / "logs").glob("*.log"))
         osascript = shutil.which("osascript") or "osascript"
         front = (
             f'tell application "System Events" to set frontmost of (first process whose unix id is {process.pid}) to true'
         )
-        subprocess.run([osascript, "-e", front], stdin=subprocess.DEVNULL, capture_output=True, check=False)
-        quit_app = shutil.which("sh") or "sh"
-        quit_status = subprocess.run(
-            [quit_app, str(HERE / "quit-app.sh"), str(process.pid)],
+        command_q = 'tell application "System Events" to keystroke "q" using command down'
+        subprocess.run(
+            [osascript, "-e", front, "-e", "delay 1", "-e", command_q],
             stdin=subprocess.DEVNULL,
+            capture_output=True,
             check=False,
-        ).returncode
+        )
+        try:
+            process.wait(timeout=QUIT_WAIT_SECONDS)
+            quit_status = 0
+        except subprocess.TimeoutExpired:
+            quit_app = shutil.which("sh") or "sh"
+            quit_status = (
+                subprocess.run(
+                    [quit_app, str(HERE / "quit-app.sh"), str(process.pid)],
+                    stdin=subprocess.DEVNULL,
+                    check=False,
+                ).returncode
+                or 3
+            )
         process.wait()
         if not logs:
             msg = f"the app wrote no log within {LOG_WAIT_SECONDS} s"
