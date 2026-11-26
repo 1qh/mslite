@@ -38,6 +38,9 @@ else
   verdict="the planted defect does not compile, so it proves nothing about the test"
 fi
 cp "${SAVED}" "${FILE}"
+# cp clones on APFS and keeps the saved copy's old time, older than the planted build, so the rebuild below would keep the
+# planted binary; touching makes the restore newer than it
+touch "${FILE}"
 cmp -s "${SAVED}" "${FILE}" || {
   echo "the file was not restored" >&2
   exit 1
