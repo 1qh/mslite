@@ -3,19 +3,16 @@
 # build never reaches the internet, and a hidden module's background request is invisible on screen.
 # usage: net-check.sh <mscore binary> <score> [seconds]
 set -e
-# every launch below gets its own temp folder, where MuseScore keeps the socket its instances find each other by, so it
-# can never reach a copy of the app the owner has open
-TMPDIR=$(mktemp -d)
-export TMPDIR
-# and an empty home, so its data folder (~/mslite) starts empty and the owner's is never read
-HOME=$(mktemp -d)
-export HOME
+# the app alone gets an empty home and its own temp folder, where MuseScore keeps the socket its instances find each
+# other by, so it never reads the owner's data or reaches the owner's open app; the shell keeps its own, which
+# osascript and quit-app.sh need to address the app
+APP_HOME=$(mktemp -d)
 BINARY=$1
 SCORE=$2
-sh "$(dirname -- "$0")/tools/test-app.sh" "${BINARY}"
+sh "$(dirname -- "$0")/tools/test-app.sh" "${BINARY}" "${SCORE}"
 SECONDS_TO_WATCH=${3:-45}
 FOUND=$(mktemp)
-"${BINARY}" "${SCORE}" < /dev/null > /dev/null 2>&1 &
+HOME="${APP_HOME}" TMPDIR="${APP_HOME}" "${BINARY}" "${SCORE}" < /dev/null > /dev/null 2>&1 &
 PID=$!
 # watch for at least SECONDS_TO_WATCH and at least 1 sample every 2 s of it; a loaded machine samples slower, so the
 # watch runs on until it has those samples, up to 4 times as long

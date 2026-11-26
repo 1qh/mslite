@@ -3,17 +3,14 @@
 # owns leaves the app running with no window, which no command-line check sees.
 # usage: window-check.sh <mscore binary> <score>
 set -e
-# every launch below gets its own temp folder, where MuseScore keeps the socket its instances find each other by, so it
-# can never reach a copy of the app the owner has open
-TMPDIR=$(mktemp -d)
-export TMPDIR
-# and an empty home, so its data folder (~/mslite) starts empty and the owner's is never read
-HOME=$(mktemp -d)
-export HOME
+# the app alone gets an empty home and its own temp folder, where MuseScore keeps the socket its instances find each
+# other by, so it never reads the owner's data or reaches the owner's open app; the shell keeps its own, which
+# osascript and quit-app.sh need to address the app
+APP_HOME=$(mktemp -d)
 BINARY=$1
 SCORE=$2
-sh "$(dirname -- "$0")/tools/test-app.sh" "${BINARY}"
-LOGS="${HOME}/mslite/logs"
+sh "$(dirname -- "$0")/tools/test-app.sh" "${BINARY}" "${SCORE}"
+LOGS="${APP_HOME}/mslite/logs"
 RUNNING=$(ps -axo comm=)
 case "
 ${RUNNING}
@@ -27,7 +24,7 @@ ${BINARY}
 esac
 MARK=$(mktemp)
 sleep 1
-"${BINARY}" "${SCORE}" < /dev/null > /dev/null 2>&1 &
+HOME="${APP_HOME}" TMPDIR="${APP_HOME}" "${BINARY}" "${SCORE}" < /dev/null > /dev/null 2>&1 &
 PID=$!
 deadline=$(($(date +%s) + 60))
 verdict=""

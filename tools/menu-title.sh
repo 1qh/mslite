@@ -12,7 +12,7 @@ BINARY=$1
 LAUNCHES=$2
 shift 2
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-sh "${HERE}/tools/test-app.sh" "${BINARY}"
+sh "${HERE}/tools/test-app.sh" "${BINARY}" "$@"
 wrong=0
 readings=0
 for score in "$@"; do

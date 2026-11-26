@@ -13,7 +13,7 @@ SCORE=$2
 SHOTS=$3
 PLAY_SECONDS=${4:-6}
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-sh "${HERE}/tools/test-app.sh" "${BINARY}"
+sh "${HERE}/tools/test-app.sh" "${BINARY}" "${SCORE}"
 # the app alone gets its own temp folder, where MuseScore keeps the socket its instances find each other by, so it
 # can never reach a copy of the app the owner has open, and an empty home, so its data folder starts empty; the
 # osascript calls keep the shell's own, or System Events loses the process's menu bar

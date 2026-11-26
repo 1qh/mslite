@@ -82,7 +82,7 @@ def main() -> int:
         sys.stderr.write("usage: remember-probe.py <test copy's mscore binary> <score>\n")
         return 2
     binary, score = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-    guard = subprocess.run([shutil.which("sh") or "sh", str(HERE / "tools" / "test-app.sh"), str(binary)],
+    guard = subprocess.run([shutil.which("sh") or "sh", str(HERE / "tools" / "test-app.sh"), str(binary), str(score)],
                            stdin=subprocess.DEVNULL, check=False)
     if guard.returncode:
         return guard.returncode

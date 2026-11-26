@@ -4,10 +4,6 @@
 # usage: close-reopen.sh <app bundle> <score>
 # Runs on an empty data folder so the owner's session is untouched; needs no other copy of the app running.
 set -eu
-# every launch below gets its own temp folder, where MuseScore keeps the socket its instances find each other by, so it
-# can never reach a copy of the app the owner has open
-TMPDIR=$(mktemp -d)
-export TMPDIR
 [ "$#" -eq 2 ] || {
   echo "usage: close-reopen.sh <app bundle> <score>" >&2
   exit 2
@@ -15,10 +11,10 @@ export TMPDIR
 APP=$1
 SCORE=$2
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-sh "${HERE}/tools/test-app.sh" "${APP}/Contents/MacOS/mscore"
+sh "${HERE}/tools/test-app.sh" "${APP}/Contents/MacOS/mscore" "${SCORE}"
 FRESH=$(mktemp -d)
 windows() { swift "${HERE}/tools/windows.swift" "$1" | awk '$1 == "layer" && $2 == 0 && $4 == "onscreen=true"' | grep -c . || true; }
-HOME="${FRESH}" "${APP}/Contents/MacOS/mscore" "${SCORE}" < /dev/null > /dev/null 2>&1 &
+HOME="${FRESH}" TMPDIR="${FRESH}" "${APP}/Contents/MacOS/mscore" "${SCORE}" < /dev/null > /dev/null 2>&1 &
 PID=$!
 deadline=$(($(date +%s) + 60))
 until [ "$(windows "${PID}")" -ge 1 ]; do
@@ -41,7 +37,7 @@ fi
 [ -s "${FRESH}/mslite/session" ] && echo "session file left: $(head -c 300 "${FRESH}/mslite/session"/* 2> /dev/null | tr '\n' ' ')"
 find "${FRESH}/mslite" -mindepth 1 -maxdepth 1 -exec basename {} \; | tr '\n' ' '
 echo
-HOME="${FRESH}" "${APP}/Contents/MacOS/mscore" < /dev/null > /dev/null 2>&1 &
+HOME="${FRESH}" TMPDIR="${FRESH}" "${APP}/Contents/MacOS/mscore" < /dev/null > /dev/null 2>&1 &
 AGAIN=$!
 sleep 15
 if kill -0 "${AGAIN}" 2> /dev/null; then

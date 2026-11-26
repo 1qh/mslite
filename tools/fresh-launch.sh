@@ -6,10 +6,6 @@
 # Runs the app with HOME pointed at a new empty folder, so its data folder (~/mslite) starts empty and the owner's stays
 # untouched; give it a binary whose bundle identifier no running app shares, or macOS hands the score to that app.
 set -eu
-# every launch below gets its own temp folder, where MuseScore keeps the socket its instances find each other by, so it
-# can never reach a copy of the app the owner has open
-TMPDIR=$(mktemp -d)
-export TMPDIR
 [ "$#" -eq 2 ] || {
   echo "usage: fresh-launch.sh <mscore binary> <score>" >&2
   exit 2
@@ -17,9 +13,9 @@ export TMPDIR
 BINARY=$1
 SCORE=$2
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-sh "${HERE}/tools/test-app.sh" "${BINARY}"
+sh "${HERE}/tools/test-app.sh" "${BINARY}" "${SCORE}"
 FRESH=$(mktemp -d)
-HOME="${FRESH}" "${BINARY}" "${SCORE}" < /dev/null > /dev/null 2>&1 &
+HOME="${FRESH}" TMPDIR="${FRESH}" "${BINARY}" "${SCORE}" < /dev/null > /dev/null 2>&1 &
 PID=$!
 deadline=$(($(date +%s) + 60))
 log=""
