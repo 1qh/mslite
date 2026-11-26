@@ -31,6 +31,7 @@ case "${KIND}" in
     (cd "${HERE}" && .venv/bin/python -m tools.remember_probe "${TEST_BINARY}" "${SCORE}" && .venv/bin/python -m tools.metronome_pick "${TEST_BINARY}" "${SCORE}")
     sh "${HERE}/tools/isolation-check.sh" "${TEST_BINARY}" "${SCORE}"
     sh "${HERE}/tools/keyboard-check.sh" "${TEST_BINARY}" "${SCORE}" "${WORK}/keys"
+    sh "${HERE}/tools/practice-check.sh" "${TEST_BINARY}" "${SCORE}" "${WORK}/practice"
     ;;
   *)
     echo "unknown check kind ${KIND}: gates or features" >&2

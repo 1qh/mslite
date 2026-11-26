@@ -95,6 +95,18 @@ index 2d9f86c5..bc8374b2 100644
 -        <file>configs/user_agent.cfg</file>
      </qresource>
  </RCC>
+diff --git a/src/app/app_config.h.in b/src/app/app_config.h.in
+index 3772a83f..137313e9 100644
+--- a/src/app/app_config.h.in
++++ b/src/app/app_config.h.in
+@@ -25,6 +25,7 @@
+ #cmakedefine MUE_BUILD_MUSESOUNDS_MODULE 1
+ #cmakedefine MUE_BUILD_NOTATION_MODULE 1
+ #cmakedefine MUE_BUILD_NOTATIONSCENE_MODULE 1
++#cmakedefine MUE_BUILD_NOTATIONSCENE_QML 1
+ #cmakedefine MUE_BUILD_PALETTE_MODULE 1
+ #cmakedefine MUE_BUILD_PLAYBACK_MODULE 1
+ #cmakedefine MUE_BUILD_PREFERENCES_MODULE 1
 diff --git a/src/app/appfactory.cpp b/src/app/appfactory.cpp
 index fc0496ae..acc451b2 100644
 --- a/src/app/appfactory.cpp
@@ -119,6 +131,41 @@ index fc0496ae..acc451b2 100644
      app->addModule(new mu::context::ContextModule());
  
  #ifdef MUE_BUILD_CONVERTER_MODULE
+diff --git a/src/app/cmdoptions.h b/src/app/cmdoptions.h
+index 1f0f9a62..2dceceef 100644
+--- a/src/app/cmdoptions.h
++++ b/src/app/cmdoptions.h
+@@ -7,12 +7,14 @@
+ #include "global/io/path.h"
+ #include "global/iapplication.h"
+ #include "global/logger.h"
++#include "importexport/videoexport/videoexporttypes.h"
+ 
+ namespace mu::app {
+ enum class ConvertType {
+     File,
+     Batch,
+     Serve,
++    KeyboardImage,
+     ConvertScoreParts,
+     ExportScoreMedia,
+     ExportScoreMeta,
+@@ -47,6 +49,7 @@ struct CmdOptions {
+         PageNumber,
+         ScoreRegion,
+         NoAudio,
++        KeyboardImageWidth,
+     };
+ 
+     muse::IApplication::RunMode runMode = muse::IApplication::RunMode::GuiApp;
+@@ -74,6 +77,7 @@ struct CmdOptions {
+     } exportAudio;
+ 
+     struct {
++        std::optional<iex::videoexport::ViewMode> viewMode;
+         std::optional<std::string> resolution;
+         std::optional<int> fps;
+         std::optional<double> leadingSec;
 diff --git a/src/app/configs/high_contrast_black.cfg b/src/app/configs/high_contrast_black.cfg
 index 5fa71b22..04d6a25c 100644
 --- a/src/app/configs/high_contrast_black.cfg
@@ -181,8 +228,206 @@ index fa59e1e2..00000000
 -    "general": "Musescore/{app_version} ({os_name} {os_version} {cpu_arch})",
 -    "cloud": "MS_EDITOR/{app_version}.{app_build} ({kernel_type} {kernel_version} {os_name} {os_version} {cpu_arch})"
 -}
+diff --git a/src/app/internal/commandlineparser.cpp b/src/app/internal/commandlineparser.cpp
+index 0264e3f9..62e22bb5 100644
+--- a/src/app/internal/commandlineparser.cpp
++++ b/src/app/internal/commandlineparser.cpp
+@@ -21,6 +21,9 @@
+  */
+ #include "commandlineparser.h"
+ 
++#include <algorithm>
++#include <cstdio>
++#include <cstdlib>
+ #include <QDir>
+ 
+ #include "global/io/dir.h"
+@@ -92,6 +95,8 @@ void CommandLineParser::init()
+     m_parser.addOption(QCommandLineOption("serve",
+                                           "Stay running and process 1 conversion job per line of standard input: "
+                                           "{\"id\", \"job\", \"extension\", \"style\"}"));
++    m_parser.addOption(QCommandLineOption("keyboard-image",
++                                          "Write piano keyboard PNGs and layers.json: --keyboard-image <folder> <width>", "folder"));
+     m_parser.addOption(QCommandLineOption("extension", "Use extension to process a conversion job", "uri"));
+ 
+     m_parser.addOption(QCommandLineOption({ "F", "factory-settings" }, "Use factory settings"));
+@@ -148,10 +153,9 @@ void CommandLineParser::init()
+     // Video export
+ #ifdef MUE_BUILD_IMPEXP_VIDEOEXPORT_MODULE
+     m_parser.addOption(QCommandLineOption("score-video", "Generate video for the given score and export it to file"));
+-// not implemented
+-//    m_parser.addOption(QCommandLineOption("view-mode",
+-//                                          "View mode [paged-float, paged-original, paged-float-height, pano, auto]. Auto (default) will choose the best mode according to number of instruments etc... Will show piano for piano score only",
+-//                                          "auto"));
++    m_parser.addOption(QCommandLineOption("view-mode",
++                                          "Video view mode [page-full, flexible, practice]. Default: page-full",
++                                          "mode"));
+ // not implemented
+ //    m_parser.addOption(QCommandLineOption("piano", "Show Piano, works only if one part and not auto or float modes"));
+ //    m_parser.addOption(QCommandLineOption("piano-position", "Show Piano top or bottom. Default bottom", "bottom"));
+@@ -195,7 +199,30 @@ void CommandLineParser::init()
+ void CommandLineParser::parse(int argc, char** argv)
+ {
+     QStringList args = prepareArguments(argc, argv);
+-    m_parser.parse(args);
++    const bool parsed = m_parser.parse(args);
++    const bool keyboardImage = std::any_of(args.cbegin(), args.cend(), [](const QString& arg) {
++        return arg == "--keyboard-image" || arg.startsWith("--keyboard-image=");
++    });
++    if (keyboardImage && !parsed) {
++        fprintf(stderr, "--keyboard-image: %s\n", qPrintable(m_parser.errorText()));
++        exit(EXIT_FAILURE);
++    }
++
++#ifdef MUE_BUILD_IMPEXP_VIDEOEXPORT_MODULE
++    if (m_parser.isSet("view-mode")) {
++        const QString mode = m_parser.value("view-mode");
++        if (mode == "page-full") {
++            m_options.exportVideo.viewMode = iex::videoexport::ViewMode::PageFull;
++        } else if (mode == "flexible") {
++            m_options.exportVideo.viewMode = iex::videoexport::ViewMode::Flexible;
++        } else if (mode == "practice") {
++            m_options.exportVideo.viewMode = iex::videoexport::ViewMode::Practice;
++        } else {
++            fprintf(stderr, "Unknown --view-mode '%s'. Accepted values: page-full, flexible, practice\n", qPrintable(mode));
++            exit(EXIT_FAILURE);
++        }
++    }
++#endif
+ 
+     auto floatValue = [this](const QString& name) -> std::optional<float> {
+         bool ok = true;
+@@ -238,6 +265,21 @@ void CommandLineParser::parse(int argc, char** argv)
+         exit(EXIT_SUCCESS);
+     }
+ 
++    if (keyboardImage) {
++        m_options.runMode = IApplication::RunMode::ConsoleApp;
++        m_options.converterTask.type = ConvertType::KeyboardImage;
++        m_options.converterTask.outputFile = fromUserInputPath(m_parser.value("keyboard-image"));
++        const QStringList positional = m_parser.positionalArguments();
++        bool ok = false;
++        const int width = positional.size() == 1 ? positional.front().toInt(&ok) : 0;
++        if (!ok || width <= 0 || m_options.converterTask.outputFile.isEmpty()) {
++            fprintf(stderr, "--keyboard-image requires a nonempty folder and one positive integer width\n");
++            exit(EXIT_FAILURE);
++        }
++        m_options.converterTask.params[CmdOptions::ParamKey::KeyboardImageWidth] = width;
++        return;
++    }
++
+     if (m_parser.isSet("d")) {
+         m_options.app.loggerLevel = logger::Level::Debug;
+     }
+@@ -427,10 +469,6 @@ void CommandLineParser::parse(int argc, char** argv)
+         m_options.converterTask.inputFile = scorefiles[0];
+         m_options.converterTask.outputFile = fromUserInputPath(m_parser.value("o"));
+ 
+-        if (m_parser.isSet("view-mode")) {
+-            NOT_IMPLEMENTED;
+-        }
+-
+         if (m_parser.isSet("piano")) {
+             NOT_IMPLEMENTED;
+         }
+diff --git a/src/app/internal/consoleapp.cpp b/src/app/internal/consoleapp.cpp
+index 21d481d9..82105f3c 100644
+--- a/src/app/internal/consoleapp.cpp
++++ b/src/app/internal/consoleapp.cpp
+@@ -22,6 +22,8 @@
+ 
+ #include "consoleapp.h"
+ 
++#include <cstdio>
++#include <cstdlib>
+ #include <QApplication>
+ #ifndef Q_OS_WASM
+ #include <QThreadPool>
+@@ -38,6 +40,12 @@
+ #include "muse_framework_config.h"
+ #include "app_config.h"
+ 
++#ifdef MUE_BUILD_NOTATIONSCENE_QML
++#include <QQmlContext>
++#include <QQmlEngine>
++#include "notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h"
++#endif
++
+ #include "log.h"
+ #include "settings.h"
+ 
+@@ -406,6 +414,7 @@ void ConsoleApp::applyCommandLineOptions(const CmdOptions& options, IApplication
+ #endif
+ 
+ #ifdef MUE_BUILD_IMPEXP_VIDEOEXPORT_MODULE
++    videoExportConfiguration()->setViewMode(options.exportVideo.viewMode);
+     videoExportConfiguration()->setResolution(options.exportVideo.resolution);
+     videoExportConfiguration()->setFps(options.exportVideo.fps);
+     videoExportConfiguration()->setLeadingSec(options.exportVideo.leadingSec);
+@@ -448,6 +457,8 @@ int ConsoleApp::processConverter(const CmdOptions::ConverterTask& task)
+     openParams.unrollRepeats = task.params[CmdOptions::ParamKey::UnrollRepeats].toBool();
+ 
+     switch (task.type) {
++    case ConvertType::KeyboardImage:
++        return processKeyboardImages(task);
+     case ConvertType::Batch:
+         ret = converter()->batchConvert(task.inputFile, openParams, soundProfile, extensionUri);
+         break;
+@@ -512,6 +523,40 @@ int ConsoleApp::processConverter(const CmdOptions::ConverterTask& task)
+     return ret.code();
+ }
+ 
++int ConsoleApp::processKeyboardImages(const CmdOptions::ConverterTask& task)
++{
++#ifdef MUE_BUILD_NOTATIONSCENE_QML
++    if (!uiConfiguration() || !m_context) {
++        fprintf(stderr, "--keyboard-image: UI configuration or application context is unavailable\n");
++        return EXIT_FAILURE;
++    }
++    settings()->beginTransaction(false);
++    uiConfiguration()->setCurrentTheme(ui::HIGH_CONTRAST_BLACK_THEME_CODE);
++    QString error;
++    if (uiConfiguration()->currentTheme().codeKey != ui::HIGH_CONTRAST_BLACK_THEME_CODE) {
++        error = QStringLiteral("cannot select the High-contrast Black theme");
++    } else {
++        QQmlEngine engine;
++        muse::QmlIoCContext qmlContext(&engine);
++        qmlContext.ctx = m_context;
++        engine.rootContext()->setContextProperty("ioc_context", QVariant::fromValue(&qmlContext));
++        notation::PianoKeyboardView view;
++        QQmlEngine::setContextForObject(&view, engine.rootContext());
++        error = view.writeImages(task.outputFile, task.params[CmdOptions::ParamKey::KeyboardImageWidth].toInt());
++    }
++    settings()->rollbackTransaction(false);
++    if (!error.isEmpty()) {
++        fprintf(stderr, "--keyboard-image: %s\n", qPrintable(error));
++        return EXIT_FAILURE;
++    }
++    return EXIT_SUCCESS;
++#else
++    (void)task;
++    fprintf(stderr, "--keyboard-image: this build has no notation scene QML keyboard\n");
++    return EXIT_FAILURE;
++#endif
++}
++
+ int ConsoleApp::processDiagnostic(const CmdOptions::Diagnostic& task)
+ {
+     if (!diagnosticDrawProvider()) {
+diff --git a/src/app/internal/consoleapp.h b/src/app/internal/consoleapp.h
+index 92e7364a..81a60aaa 100644
+--- a/src/app/internal/consoleapp.h
++++ b/src/app/internal/consoleapp.h
+@@ -85,6 +85,7 @@ public:
+ private:
+     void applyCommandLineOptions(const CmdOptions& options, muse::IApplication::RunMode runMode);
+     int processConverter(const CmdOptions::ConverterTask& task);
++    int processKeyboardImages(const CmdOptions::ConverterTask& task);
+     int processDiagnostic(const CmdOptions::Diagnostic& task);
+     int processAudioPluginRegistration(const CmdOptions::AudioPluginRegistration& task);
+     void processAutobot(const CmdOptions::Autobot& task);
 diff --git a/src/app/main.cpp b/src/app/main.cpp
-index 6784aa2e..00c534d7 100644
+index 6784aa2e..e94cc042 100644
 --- a/src/app/main.cpp
 +++ b/src/app/main.cpp
 @@ -25,6 +25,8 @@
@@ -214,6 +459,16 @@ index 6784aa2e..00c534d7 100644
      QCoreApplication::setApplicationVersion(MUSE_APP_VERSION);
  
  #if !defined(Q_OS_WIN) && !defined(Q_OS_DARWIN) && !defined(Q_OS_WASM)
+@@ -159,6 +174,9 @@ int main(int argc, char** argv)
+     IApplication::RunMode runMode = commandLineParser.runMode();
+     QCoreApplication* qapp = nullptr;
+ 
++    if (commandLineParser.options().converterTask.type == ConvertType::KeyboardImage) {
++        qputenv("QT_QPA_PLATFORM", "offscreen");
++    }
+     if (runMode == IApplication::RunMode::AudioPluginRegistration) {
+         qapp = new QCoreApplication(argc, argv);
+     } else {
 diff --git a/src/appshell/CMakeLists.txt b/src/appshell/CMakeLists.txt
 index 1fadd6c3..9b386419 100644
 --- a/src/appshell/CMakeLists.txt
@@ -35177,6 +35432,19 @@ index 858eee41..131e5181 100644
  static constexpr muse::ui::UiContext UiCtxDevToolsOpened = "UiCtxDevToolsOpened";
  }
  
+diff --git a/src/engraving/dom/engravingitem.cpp b/src/engraving/dom/engravingitem.cpp
+index 12490575..29567e7d 100644
+--- a/src/engraving/dom/engravingitem.cpp
++++ b/src/engraving/dom/engravingitem.cpp
+@@ -676,7 +676,7 @@ Color EngravingItem::curColor(bool isVisible, Color normalColor, const rendering
+         marked = toNote(this)->mark();
+     }
+ 
+-    if (selected() || marked) {
++    if (opt.showSelection && (selected() || marked)) {
+         voice_idx_t voiceForColorChoice = track() == muse::nidx ? 0 : voice();
+         if (hasVoiceAssignmentProperties()) {
+             VoiceAssignment voiceAssignment = getProperty(Pid::VOICE_ASSIGNMENT).value<VoiceAssignment>();
 diff --git a/src/engraving/engravingerrors.h b/src/engraving/engravingerrors.h
 index 52e10a2e..1845cff2 100644
 --- a/src/engraving/engravingerrors.h
@@ -35198,6 +35466,227 @@ index 52e10a2e..1845cff2 100644
          break;
      case Err::FileOld300Format:
          text = muse::mtrc("engraving", "This file was last saved in a development version of 3.0.");
+diff --git a/src/engraving/playback/playbackeventsrenderer.cpp b/src/engraving/playback/playbackeventsrenderer.cpp
+index fb06aeac..6aadb0a5 100644
+--- a/src/engraving/playback/playbackeventsrenderer.cpp
++++ b/src/engraving/playback/playbackeventsrenderer.cpp
+@@ -265,7 +265,8 @@ void PlaybackEventsRenderer::renderMetronome(const Score* score, const int tick,
+ 
+ void PlaybackEventsRenderer::renderCountIn(const Score* score, const int startTick, const muse::mpe::timestamp_t actualTimestamp,
+                                            const muse::mpe::ArticulationsProfilePtr profile,
+-                                           muse::mpe::PlaybackEventsMap& result, muse::mpe::duration_t& countInDuration) const
++                                           muse::mpe::PlaybackEventsMap& result, muse::mpe::duration_t& countInDuration,
++                                           bool fullMeasureOnly) const
+ {
+     const Measure* measure = score->tick2measure(Fraction::fromTicks(startTick));
+     if (!measure) {
+@@ -286,7 +287,7 @@ void PlaybackEventsRenderer::renderCountIn(const Score* score, const int startTi
+     int endTick = ticksPerMeasure + (startTick - measureStartTick); // ... not starting playback at beginning of measure
+     int remainingTicks = 0;
+ 
+-    if (measure->isAnacrusis()) { // ... measure is incomplete (anacrusis)
++    if (!fullMeasureOnly && measure->isAnacrusis()) { // ... measure is incomplete (anacrusis)
+         int measureTicks = measure->ticks().ticks();
+         endTick += ticksPerMeasure - measureTicks;
+         remainingTicks = measureTicks % step;
+@@ -295,6 +296,10 @@ void PlaybackEventsRenderer::renderCountIn(const Score* score, const int startTi
+     MeasureBeat measureBeat = findBeat(score, startTick);
+     int closestMainBeatTick = score->sigmap()->bar2tick(measureBeat.measureIndex, std::ceil(measureBeat.beat));
+     remainingTicks += closestMainBeatTick - startTick;
++    if (fullMeasureOnly) {
++        endTick = ticksPerMeasure;
++        remainingTicks = 0;
++    }
+ 
+     timestamp_t eventTimestamp = actualTimestamp;
+ 
+diff --git a/src/engraving/playback/playbackeventsrenderer.h b/src/engraving/playback/playbackeventsrenderer.h
+index 01920280..32c129fd 100644
+--- a/src/engraving/playback/playbackeventsrenderer.h
++++ b/src/engraving/playback/playbackeventsrenderer.h
+@@ -57,7 +57,7 @@ public:
+ 
+     void renderCountIn(const Score* score, const int tick, const muse::mpe::timestamp_t actualTimestamp,
+                        const muse::mpe::ArticulationsProfilePtr profile, muse::mpe::PlaybackEventsMap& result,
+-                       muse::mpe::duration_t& countInDuration) const;
++                       muse::mpe::duration_t& countInDuration, bool fullMeasureOnly = false) const;
+ 
+ private:
+     void renderNoteEvents(const Chord* chord, const int tickPositionOffset, const muse::mpe::ArticulationsProfilePtr profile,
+diff --git a/src/engraving/playback/playbackmodel.cpp b/src/engraving/playback/playbackmodel.cpp
+index 28648010..a48c2b8a 100644
+--- a/src/engraving/playback/playbackmodel.cpp
++++ b/src/engraving/playback/playbackmodel.cpp
+@@ -23,6 +23,7 @@
+ #include "playbackmodel.h"
+ 
+ #include <limits>
++#include <utility>
+ 
+ #include "dom/fret.h"
+ #include "dom/harmony.h"
+@@ -415,6 +416,70 @@ void PlaybackModel::triggerCountIn(int tick, muse::mpe::duration_t& countInDurat
+     trackPlaybackData->second.offStream.send(result, {}, true /*flushOffstream*/);
+ }
+ 
++muse::mpe::duration_t PlaybackModel::setExportCountIn(bool enabled)
++{
++    if (!enabled) {
++        if (m_exportRestoreData) {
++            m_playbackDataMap = std::move(*m_exportRestoreData);
++            m_exportRestoreData.reset();
++            invalidateActivePlaybackPitches();
++            for (auto& pair : m_playbackDataMap) {
++                sendEvents(pair.first);
++            }
++        }
++        return 0;
++    }
++    if (!m_score || !m_score->firstMeasure() || m_exportRestoreData
++        || m_playbackDataMap.find(METRONOME_TRACK_ID) == m_playbackDataMap.end()) {
++        return -1;
++    }
++    PlaybackEventsMap countIn;
++    duration_t duration = 0;
++    m_renderer.renderCountIn(m_score, m_score->firstMeasure()->tick().ticks(), 0,
++                             defaultActiculationProfile(METRONOME_TRACK_ID), countIn, duration, true);
++    if (duration <= 0 || countIn.empty()) {
++        return -1;
++    }
++    m_exportRestoreData = m_playbackDataMap;
++    for (auto& pair : m_playbackDataMap) {
++        PlaybackData& data = pair.second;
++        PlaybackEventsMap shifted;
++        for (const auto& entry : std::as_const(data.originEvents)) {
++            PlaybackEventList events = entry.second;
++            for (auto& event : events) {
++                if (auto* note = std::get_if<muse::mpe::NoteEvent>(&event)) {
++                    auto arrangement = note->arrangementCtx();
++                    auto pitch = note->pitchCtx();
++                    auto expression = note->expressionCtx();
++                    arrangement.nominalTimestamp += duration;
++                    arrangement.actualTimestamp += duration;
++                    for (auto& articulation : expression.articulations) {
++                        articulation.second.meta.timestamp += duration;
++                    }
++                    event = muse::mpe::NoteEvent(std::move(arrangement), std::move(pitch), std::move(expression));
++                }
++            }
++            shifted[entry.first + duration] = std::move(events);
++        }
++        if (pair.first == METRONOME_TRACK_ID) {
++            for (const auto& entry : std::as_const(countIn)) {
++                shifted[entry.first] = entry.second;
++            }
++        }
++        DynamicLevelLayers dynamics;
++        for (const auto& layer : std::as_const(data.dynamics)) {
++            for (const auto& entry : layer.second) {
++                dynamics[layer.first][entry.first + duration] = entry.second;
++            }
++        }
++        data.originEvents = std::move(shifted);
++        data.dynamics = std::move(dynamics);
++        sendEvents(pair.first);
++    }
++    invalidateActivePlaybackPitches();
++    return duration;
++}
++
+ InstrumentTrackIdSet PlaybackModel::existingTrackIdSet() const
+ {
+     InstrumentTrackIdSet result;
+diff --git a/src/engraving/playback/playbackmodel.h b/src/engraving/playback/playbackmodel.h
+index 9980c660..ea2fa1fe 100644
+--- a/src/engraving/playback/playbackmodel.h
++++ b/src/engraving/playback/playbackmodel.h
+@@ -25,6 +25,7 @@
+ #include <unordered_map>
+ #include <map>
+ #include <functional>
++#include <optional>
+ 
+ #include "async/asyncable.h"
+ #include "async/channel.h"
+@@ -94,6 +95,7 @@ public:
+     void triggerEventsForItems(const std::vector<const EngravingItem*>& items, muse::mpe::duration_t duration, bool flushSound);
+     void triggerMetronome(int tick);
+     void triggerCountIn(int tick, muse::mpe::duration_t& countInDuration);
++    muse::mpe::duration_t setExportCountIn(bool enabled);
+ 
+     InstrumentTrackIdSet existingTrackIdSet() const;
+     muse::async::Channel<InstrumentTrackId> trackAdded() const;
+@@ -180,6 +182,7 @@ private:
+ 
+     std::unordered_map<InstrumentTrackId, PlaybackContextPtr> m_playbackCtxMap;
+     std::unordered_map<InstrumentTrackId, muse::mpe::PlaybackData> m_playbackDataMap;
++    std::optional<std::unordered_map<InstrumentTrackId, muse::mpe::PlaybackData> > m_exportRestoreData;
+     std::unordered_map<InstrumentTrackId, bool> m_sendEventsOnScoreChangeMap;
+ 
+     mutable PlaybackNoteIndex m_activePlaybackNoteIndex;
+diff --git a/src/engraving/rendering/iscorerenderer.h b/src/engraving/rendering/iscorerenderer.h
+index e0e4d5cd..48e392f5 100644
+--- a/src/engraving/rendering/iscorerenderer.h
++++ b/src/engraving/rendering/iscorerenderer.h
+@@ -37,6 +37,7 @@ namespace mu::engraving {
+ class Score;
+ class EngravingItem;
+ class Page;
++class System;
+ 
+ class Accidental;
+ class ActionIcon;
+@@ -118,6 +119,7 @@ public:
+         int copyCount = 1;
+         int trimMarginPixelSize = -1;
+         int deviceDpi = -1;
++        const System* onlySystem = nullptr;
+ 
+         std::function<void(muse::draw::Painter* painter, const Page* page, const RectF& pageRect)> onPaintPageSheet;
+         std::function<void()> onNewPage;
+diff --git a/src/engraving/rendering/paintoptions.h b/src/engraving/rendering/paintoptions.h
+index 86efbbe1..2fc35c13 100644
+--- a/src/engraving/rendering/paintoptions.h
++++ b/src/engraving/rendering/paintoptions.h
+@@ -26,5 +26,6 @@ struct PaintOptions
+ {
+     bool isPrinting = false;
+     bool invertColors = false;
++    bool showSelection = true;
+ };
+ }
+diff --git a/src/engraving/rendering/score/paint.cpp b/src/engraving/rendering/score/paint.cpp
+index 3da4365b..89e1676f 100644
+--- a/src/engraving/rendering/score/paint.cpp
++++ b/src/engraving/rendering/score/paint.cpp
+@@ -24,6 +24,7 @@
+ #include "draw/painter.h"
+ #include "dom/score.h"
+ #include "dom/page.h"
++#include "dom/system.h"
+ #include "dom/engravingitem.h"
+ 
+ #include "tdraw.h"
+@@ -146,13 +147,18 @@ void Paint::paintScore(Painter* painter, Score* score, const IScoreRenderer::Sco
+             }
+ 
+             std::vector<EngravingItem*> elements = page->items(drawRect.translated(-pagePos));
++            if (opt.onlySystem) {
++                elements.erase(std::remove_if(elements.begin(), elements.end(), [&opt](const EngravingItem* item) {
++                    return item->findAncestor(ElementType::SYSTEM) != opt.onlySystem;
++                }), elements.end());
++            }
+             paintItems(*painter, elements, opt);
+ 
+             if (disableClipping) {
+                 painter->setClipping(false);
+             }
+ 
+-            if (!opt.isPrinting) {
++            if (!opt.isPrinting && !opt.onlySystem) {
+                 DebugPaint::paintPageDebug(*painter, page, elements);
+             }
+ 
 diff --git a/src/framework/audio/common/audioutils.h b/src/framework/audio/common/audioutils.h
 index 0fecca7b..fa4bf6c4 100644
 --- a/src/framework/audio/common/audioutils.h
@@ -36252,6 +36741,498 @@ index d0cf77b7..70e5965f 100644
  
      MOCK_METHOD(bool, highResolutionTimers, (), (const, override));
  };
+diff --git a/src/framework/media/internal/ffmpeg/v4/ffmpeglibhandler.cpp b/src/framework/media/internal/ffmpeg/v4/ffmpeglibhandler.cpp
+index 57aef71d..c13aa34a 100644
+--- a/src/framework/media/internal/ffmpeg/v4/ffmpeglibhandler.cpp
++++ b/src/framework/media/internal/ffmpeg/v4/ffmpeglibhandler.cpp
+@@ -87,6 +87,7 @@ bool FFmpegLibHandler::loadApi()
+     RESOLVE_FROM(m_avCodecLibrary, av_packet_rescale_ts);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_alloc_context3);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_find_encoder);
++    RESOLVE_FROM(m_avCodecLibrary, avcodec_find_encoder_by_name);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_find_decoder);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_free_context);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_open2);
+@@ -206,6 +207,7 @@ void FFmpegLibHandler::clearFunctions()
+     avio_context_free = nullptr;
+     avcodec_alloc_context3 = nullptr;
+     avcodec_find_encoder = nullptr;
++    avcodec_find_encoder_by_name = nullptr;
+     avcodec_find_decoder = nullptr;
+     avcodec_free_context = nullptr;
+     avcodec_open2 = nullptr;
+diff --git a/src/framework/media/internal/ffmpeg/v4/ffmpeglibhandler.h b/src/framework/media/internal/ffmpeg/v4/ffmpeglibhandler.h
+index cd503f3d..2117eeed 100644
+--- a/src/framework/media/internal/ffmpeg/v4/ffmpeglibhandler.h
++++ b/src/framework/media/internal/ffmpeg/v4/ffmpeglibhandler.h
+@@ -85,6 +85,7 @@ public:
+     // libavcodec
+     AVCodecContext*(*avcodec_alloc_context3)(const AVCodec* codec) = nullptr;
+     const AVCodec*(*avcodec_find_encoder)(AVCodecID id) = nullptr;
++    const AVCodec*(*avcodec_find_encoder_by_name)(const char* name) = nullptr;
+     const AVCodec*(*avcodec_find_decoder)(AVCodecID id) = nullptr;
+     void (*avcodec_free_context)(AVCodecContext** avctx) = nullptr;
+     int (*avcodec_open2)(AVCodecContext* avctx, const AVCodec* codec, AVDictionary** options) = nullptr;
+diff --git a/src/framework/media/internal/ffmpeg/v4/videoencoder.cpp b/src/framework/media/internal/ffmpeg/v4/videoencoder.cpp
+index fd364711..8faabff2 100644
+--- a/src/framework/media/internal/ffmpeg/v4/videoencoder.cpp
++++ b/src/framework/media/internal/ffmpeg/v4/videoencoder.cpp
+@@ -140,7 +140,10 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+     m_ffmpeg->videoStream->time_base.num = 1;
+ 
+     // find the video encoder
+-    m_ffmpeg->codec = m_ffmpegHandler->avcodec_find_encoder(AV_CODEC_ID_H264);
++    m_ffmpeg->codec = options.hevcVideoToolbox
++                      ? (m_ffmpegHandler->avcodec_find_encoder_by_name
++                         ? m_ffmpegHandler->avcodec_find_encoder_by_name("hevc_videotoolbox") : nullptr)
++                      : m_ffmpegHandler->avcodec_find_encoder(AV_CODEC_ID_H264);
+     if (!m_ffmpeg->codec) {
+         LOGE() << "not found codec";
+         return false;
+@@ -152,7 +155,10 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+     }
+ 
+     m_ffmpeg->videoStream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+-    m_ffmpeg->videoStream->codecpar->codec_id = AV_CODEC_ID_H264;
++    m_ffmpeg->videoStream->codecpar->codec_id = options.hevcVideoToolbox ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
++    if (options.hevcVideoToolbox) {
++        m_ffmpeg->videoStream->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
++    }
+     m_ffmpeg->videoStream->codecpar->width = options.width;
+     m_ffmpeg->videoStream->codecpar->height = options.height;
+     m_ffmpeg->videoStream->codecpar->format = AV_PIX_FMT_YUV420P;
+@@ -164,7 +170,8 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+         return false;
+     }
+ 
+-    m_ffmpeg->codecCtx->profile = FF_PROFILE_H264_MAIN;
++    m_ffmpeg->codecCtx->profile = options.hevcVideoToolbox
++                                 ? FF_PROFILE_HEVC_MAIN : FF_PROFILE_H264_MAIN;
+     m_ffmpeg->codecCtx->time_base.den = options.fps;
+     m_ffmpeg->codecCtx->time_base.num = 1;
+     m_ffmpeg->codecCtx->gop_size = options.gop;
+@@ -666,7 +673,8 @@ bool VideoEncoder::addAudio(const io::path_t& audioPath)
+                 return false;
+             }
+             m_ffmpegHandler->avcodec_parameters_copy(outStream->codecpar, videoFmtCtx->streams[i]->codecpar);
+-            outStream->codecpar->codec_tag = 0;
++            outStream->codecpar->codec_tag = outStream->codecpar->codec_id == AV_CODEC_ID_HEVC
++                                            ? MKTAG('h', 'v', 'c', '1') : 0;
+             outStream->time_base = videoFmtCtx->streams[i]->time_base;
+             outVideoIdx = outStream->index;
+             break;
+diff --git a/src/framework/media/internal/ffmpeg/v5/ffmpeglibhandler.cpp b/src/framework/media/internal/ffmpeg/v5/ffmpeglibhandler.cpp
+index 7f2fe7ba..fd27f4f3 100644
+--- a/src/framework/media/internal/ffmpeg/v5/ffmpeglibhandler.cpp
++++ b/src/framework/media/internal/ffmpeg/v5/ffmpeglibhandler.cpp
+@@ -87,6 +87,7 @@ bool FFmpegLibHandler::loadApi()
+     RESOLVE_FROM(m_avCodecLibrary, av_packet_rescale_ts);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_alloc_context3);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_find_encoder);
++    RESOLVE_FROM(m_avCodecLibrary, avcodec_find_encoder_by_name);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_find_decoder);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_free_context);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_open2);
+@@ -206,6 +207,7 @@ void FFmpegLibHandler::clearFunctions()
+     avio_context_free = nullptr;
+     avcodec_alloc_context3 = nullptr;
+     avcodec_find_encoder = nullptr;
++    avcodec_find_encoder_by_name = nullptr;
+     avcodec_find_decoder = nullptr;
+     avcodec_free_context = nullptr;
+     avcodec_open2 = nullptr;
+diff --git a/src/framework/media/internal/ffmpeg/v5/ffmpeglibhandler.h b/src/framework/media/internal/ffmpeg/v5/ffmpeglibhandler.h
+index b35fe705..6265ec4f 100644
+--- a/src/framework/media/internal/ffmpeg/v5/ffmpeglibhandler.h
++++ b/src/framework/media/internal/ffmpeg/v5/ffmpeglibhandler.h
+@@ -85,6 +85,7 @@ public:
+     // libavcodec
+     AVCodecContext*(*avcodec_alloc_context3)(const AVCodec* codec) = nullptr;
+     const AVCodec*(*avcodec_find_encoder)(AVCodecID id) = nullptr;
++    const AVCodec*(*avcodec_find_encoder_by_name)(const char* name) = nullptr;
+     const AVCodec*(*avcodec_find_decoder)(AVCodecID id) = nullptr;
+     void (*avcodec_free_context)(AVCodecContext** avctx) = nullptr;
+     int (*avcodec_open2)(AVCodecContext* avctx, const AVCodec* codec, AVDictionary** options) = nullptr;
+diff --git a/src/framework/media/internal/ffmpeg/v5/videoencoder.cpp b/src/framework/media/internal/ffmpeg/v5/videoencoder.cpp
+index 7a57fbc8..36ab4eb0 100644
+--- a/src/framework/media/internal/ffmpeg/v5/videoencoder.cpp
++++ b/src/framework/media/internal/ffmpeg/v5/videoencoder.cpp
+@@ -140,7 +140,10 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+     m_ffmpeg->videoStream->time_base.num = 1;
+ 
+     // find the video encoder
+-    m_ffmpeg->codec = m_ffmpegHandler->avcodec_find_encoder(AV_CODEC_ID_H264);
++    m_ffmpeg->codec = options.hevcVideoToolbox
++                      ? (m_ffmpegHandler->avcodec_find_encoder_by_name
++                         ? m_ffmpegHandler->avcodec_find_encoder_by_name("hevc_videotoolbox") : nullptr)
++                      : m_ffmpegHandler->avcodec_find_encoder(AV_CODEC_ID_H264);
+     if (!m_ffmpeg->codec) {
+         LOGE() << "not found codec";
+         return false;
+@@ -152,7 +155,10 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+     }
+ 
+     m_ffmpeg->videoStream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+-    m_ffmpeg->videoStream->codecpar->codec_id = AV_CODEC_ID_H264;
++    m_ffmpeg->videoStream->codecpar->codec_id = options.hevcVideoToolbox ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
++    if (options.hevcVideoToolbox) {
++        m_ffmpeg->videoStream->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
++    }
+     m_ffmpeg->videoStream->codecpar->width = options.width;
+     m_ffmpeg->videoStream->codecpar->height = options.height;
+     m_ffmpeg->videoStream->codecpar->format = AV_PIX_FMT_YUV420P;
+@@ -164,7 +170,8 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+         return false;
+     }
+ 
+-    m_ffmpeg->codecCtx->profile = FF_PROFILE_H264_MAIN;
++    m_ffmpeg->codecCtx->profile = options.hevcVideoToolbox
++                                 ? FF_PROFILE_HEVC_MAIN : FF_PROFILE_H264_MAIN;
+     m_ffmpeg->codecCtx->time_base.den = options.fps;
+     m_ffmpeg->codecCtx->time_base.num = 1;
+     m_ffmpeg->codecCtx->gop_size = options.gop;
+@@ -666,7 +673,8 @@ bool VideoEncoder::addAudio(const io::path_t& audioPath)
+                 return false;
+             }
+             m_ffmpegHandler->avcodec_parameters_copy(outStream->codecpar, videoFmtCtx->streams[i]->codecpar);
+-            outStream->codecpar->codec_tag = 0;
++            outStream->codecpar->codec_tag = outStream->codecpar->codec_id == AV_CODEC_ID_HEVC
++                                            ? MKTAG('h', 'v', 'c', '1') : 0;
+             outStream->time_base = videoFmtCtx->streams[i]->time_base;
+             outVideoIdx = outStream->index;
+             break;
+diff --git a/src/framework/media/internal/ffmpeg/v6/ffmpeglibhandler.cpp b/src/framework/media/internal/ffmpeg/v6/ffmpeglibhandler.cpp
+index 0b79639f..d0f2c1ed 100644
+--- a/src/framework/media/internal/ffmpeg/v6/ffmpeglibhandler.cpp
++++ b/src/framework/media/internal/ffmpeg/v6/ffmpeglibhandler.cpp
+@@ -87,6 +87,7 @@ bool FFmpegLibHandler::loadApi()
+     RESOLVE_FROM(m_avCodecLibrary, av_packet_rescale_ts);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_alloc_context3);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_find_encoder);
++    RESOLVE_FROM(m_avCodecLibrary, avcodec_find_encoder_by_name);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_find_decoder);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_free_context);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_open2);
+@@ -206,6 +207,7 @@ void FFmpegLibHandler::clearFunctions()
+     avio_context_free = nullptr;
+     avcodec_alloc_context3 = nullptr;
+     avcodec_find_encoder = nullptr;
++    avcodec_find_encoder_by_name = nullptr;
+     avcodec_find_decoder = nullptr;
+     avcodec_free_context = nullptr;
+     avcodec_open2 = nullptr;
+diff --git a/src/framework/media/internal/ffmpeg/v6/ffmpeglibhandler.h b/src/framework/media/internal/ffmpeg/v6/ffmpeglibhandler.h
+index fda7d9c5..207aaf79 100644
+--- a/src/framework/media/internal/ffmpeg/v6/ffmpeglibhandler.h
++++ b/src/framework/media/internal/ffmpeg/v6/ffmpeglibhandler.h
+@@ -85,6 +85,7 @@ public:
+     // libavcodec
+     AVCodecContext*(*avcodec_alloc_context3)(const AVCodec* codec) = nullptr;
+     const AVCodec*(*avcodec_find_encoder)(AVCodecID id) = nullptr;
++    const AVCodec*(*avcodec_find_encoder_by_name)(const char* name) = nullptr;
+     const AVCodec*(*avcodec_find_decoder)(AVCodecID id) = nullptr;
+     void (*avcodec_free_context)(AVCodecContext** avctx) = nullptr;
+     int (*avcodec_open2)(AVCodecContext* avctx, const AVCodec* codec, AVDictionary** options) = nullptr;
+diff --git a/src/framework/media/internal/ffmpeg/v6/videoencoder.cpp b/src/framework/media/internal/ffmpeg/v6/videoencoder.cpp
+index a333a93f..2bd70722 100644
+--- a/src/framework/media/internal/ffmpeg/v6/videoencoder.cpp
++++ b/src/framework/media/internal/ffmpeg/v6/videoencoder.cpp
+@@ -140,7 +140,10 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+     m_ffmpeg->videoStream->time_base.num = 1;
+ 
+     // find the video encoder
+-    m_ffmpeg->codec = m_ffmpegHandler->avcodec_find_encoder(AV_CODEC_ID_H264);
++    m_ffmpeg->codec = options.hevcVideoToolbox
++                      ? (m_ffmpegHandler->avcodec_find_encoder_by_name
++                         ? m_ffmpegHandler->avcodec_find_encoder_by_name("hevc_videotoolbox") : nullptr)
++                      : m_ffmpegHandler->avcodec_find_encoder(AV_CODEC_ID_H264);
+     if (!m_ffmpeg->codec) {
+         LOGE() << "not found codec";
+         return false;
+@@ -152,7 +155,10 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+     }
+ 
+     m_ffmpeg->videoStream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+-    m_ffmpeg->videoStream->codecpar->codec_id = AV_CODEC_ID_H264;
++    m_ffmpeg->videoStream->codecpar->codec_id = options.hevcVideoToolbox ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
++    if (options.hevcVideoToolbox) {
++        m_ffmpeg->videoStream->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
++    }
+     m_ffmpeg->videoStream->codecpar->width = options.width;
+     m_ffmpeg->videoStream->codecpar->height = options.height;
+     m_ffmpeg->videoStream->codecpar->format = AV_PIX_FMT_YUV420P;
+@@ -164,7 +170,8 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+         return false;
+     }
+ 
+-    m_ffmpeg->codecCtx->profile = AV_PROFILE_H264_MAIN;
++    m_ffmpeg->codecCtx->profile = options.hevcVideoToolbox
++                                 ? AV_PROFILE_HEVC_MAIN : AV_PROFILE_H264_MAIN;
+     m_ffmpeg->codecCtx->time_base.den = options.fps;
+     m_ffmpeg->codecCtx->time_base.num = 1;
+     m_ffmpeg->codecCtx->gop_size = options.gop;
+@@ -666,7 +673,8 @@ bool VideoEncoder::addAudio(const io::path_t& audioPath)
+                 return false;
+             }
+             m_ffmpegHandler->avcodec_parameters_copy(outStream->codecpar, videoFmtCtx->streams[i]->codecpar);
+-            outStream->codecpar->codec_tag = 0;
++            outStream->codecpar->codec_tag = outStream->codecpar->codec_id == AV_CODEC_ID_HEVC
++                                            ? MKTAG('h', 'v', 'c', '1') : 0;
+             outStream->time_base = videoFmtCtx->streams[i]->time_base;
+             outVideoIdx = outStream->index;
+             break;
+diff --git a/src/framework/media/internal/ffmpeg/v7/ffmpeglibhandler.cpp b/src/framework/media/internal/ffmpeg/v7/ffmpeglibhandler.cpp
+index 0ad444dd..de131607 100644
+--- a/src/framework/media/internal/ffmpeg/v7/ffmpeglibhandler.cpp
++++ b/src/framework/media/internal/ffmpeg/v7/ffmpeglibhandler.cpp
+@@ -87,6 +87,7 @@ bool FFmpegLibHandler::loadApi()
+     RESOLVE_FROM(m_avCodecLibrary, av_packet_rescale_ts);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_alloc_context3);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_find_encoder);
++    RESOLVE_FROM(m_avCodecLibrary, avcodec_find_encoder_by_name);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_find_decoder);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_free_context);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_open2);
+@@ -206,6 +207,7 @@ void FFmpegLibHandler::clearFunctions()
+     avio_context_free = nullptr;
+     avcodec_alloc_context3 = nullptr;
+     avcodec_find_encoder = nullptr;
++    avcodec_find_encoder_by_name = nullptr;
+     avcodec_find_decoder = nullptr;
+     avcodec_free_context = nullptr;
+     avcodec_open2 = nullptr;
+diff --git a/src/framework/media/internal/ffmpeg/v7/ffmpeglibhandler.h b/src/framework/media/internal/ffmpeg/v7/ffmpeglibhandler.h
+index 2c0d7483..684b2427 100644
+--- a/src/framework/media/internal/ffmpeg/v7/ffmpeglibhandler.h
++++ b/src/framework/media/internal/ffmpeg/v7/ffmpeglibhandler.h
+@@ -85,6 +85,7 @@ public:
+     // libavcodec
+     AVCodecContext*(*avcodec_alloc_context3)(const AVCodec* codec) = nullptr;
+     const AVCodec*(*avcodec_find_encoder)(AVCodecID id) = nullptr;
++    const AVCodec*(*avcodec_find_encoder_by_name)(const char* name) = nullptr;
+     const AVCodec*(*avcodec_find_decoder)(AVCodecID id) = nullptr;
+     void (*avcodec_free_context)(AVCodecContext** avctx) = nullptr;
+     int (*avcodec_open2)(AVCodecContext* avctx, const AVCodec* codec, AVDictionary** options) = nullptr;
+diff --git a/src/framework/media/internal/ffmpeg/v7/videoencoder.cpp b/src/framework/media/internal/ffmpeg/v7/videoencoder.cpp
+index a9b83991..7e2eda66 100644
+--- a/src/framework/media/internal/ffmpeg/v7/videoencoder.cpp
++++ b/src/framework/media/internal/ffmpeg/v7/videoencoder.cpp
+@@ -140,7 +140,10 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+     m_ffmpeg->videoStream->time_base.num = 1;
+ 
+     // find the video encoder
+-    m_ffmpeg->codec = m_ffmpegHandler->avcodec_find_encoder(AV_CODEC_ID_H264);
++    m_ffmpeg->codec = options.hevcVideoToolbox
++                      ? (m_ffmpegHandler->avcodec_find_encoder_by_name
++                         ? m_ffmpegHandler->avcodec_find_encoder_by_name("hevc_videotoolbox") : nullptr)
++                      : m_ffmpegHandler->avcodec_find_encoder(AV_CODEC_ID_H264);
+     if (!m_ffmpeg->codec) {
+         LOGE() << "not found codec";
+         return false;
+@@ -152,7 +155,10 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+     }
+ 
+     m_ffmpeg->videoStream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+-    m_ffmpeg->videoStream->codecpar->codec_id = AV_CODEC_ID_H264;
++    m_ffmpeg->videoStream->codecpar->codec_id = options.hevcVideoToolbox ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
++    if (options.hevcVideoToolbox) {
++        m_ffmpeg->videoStream->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
++    }
+     m_ffmpeg->videoStream->codecpar->width = options.width;
+     m_ffmpeg->videoStream->codecpar->height = options.height;
+     m_ffmpeg->videoStream->codecpar->format = AV_PIX_FMT_YUV420P;
+@@ -164,7 +170,8 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+         return false;
+     }
+ 
+-    m_ffmpeg->codecCtx->profile = AV_PROFILE_H264_MAIN;
++    m_ffmpeg->codecCtx->profile = options.hevcVideoToolbox
++                                 ? AV_PROFILE_HEVC_MAIN : AV_PROFILE_H264_MAIN;
+     m_ffmpeg->codecCtx->time_base.den = options.fps;
+     m_ffmpeg->codecCtx->time_base.num = 1;
+     m_ffmpeg->codecCtx->gop_size = options.gop;
+@@ -666,7 +673,8 @@ bool VideoEncoder::addAudio(const io::path_t& audioPath)
+                 return false;
+             }
+             m_ffmpegHandler->avcodec_parameters_copy(outStream->codecpar, videoFmtCtx->streams[i]->codecpar);
+-            outStream->codecpar->codec_tag = 0;
++            outStream->codecpar->codec_tag = outStream->codecpar->codec_id == AV_CODEC_ID_HEVC
++                                            ? MKTAG('h', 'v', 'c', '1') : 0;
+             outStream->time_base = videoFmtCtx->streams[i]->time_base;
+             outVideoIdx = outStream->index;
+             break;
+diff --git a/src/framework/media/internal/ffmpeg/v8/ffmpeglibhandler.cpp b/src/framework/media/internal/ffmpeg/v8/ffmpeglibhandler.cpp
+index 2eb1e212..9bc5de50 100644
+--- a/src/framework/media/internal/ffmpeg/v8/ffmpeglibhandler.cpp
++++ b/src/framework/media/internal/ffmpeg/v8/ffmpeglibhandler.cpp
+@@ -87,6 +87,7 @@ bool FFmpegLibHandler::loadApi()
+     RESOLVE_FROM(m_avCodecLibrary, av_packet_rescale_ts);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_alloc_context3);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_find_encoder);
++    RESOLVE_FROM(m_avCodecLibrary, avcodec_find_encoder_by_name);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_find_decoder);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_free_context);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_open2);
+@@ -206,6 +207,7 @@ void FFmpegLibHandler::clearFunctions()
+     avio_context_free = nullptr;
+     avcodec_alloc_context3 = nullptr;
+     avcodec_find_encoder = nullptr;
++    avcodec_find_encoder_by_name = nullptr;
+     avcodec_find_decoder = nullptr;
+     avcodec_free_context = nullptr;
+     avcodec_open2 = nullptr;
+diff --git a/src/framework/media/internal/ffmpeg/v8/ffmpeglibhandler.h b/src/framework/media/internal/ffmpeg/v8/ffmpeglibhandler.h
+index 8915a63e..06d878eb 100644
+--- a/src/framework/media/internal/ffmpeg/v8/ffmpeglibhandler.h
++++ b/src/framework/media/internal/ffmpeg/v8/ffmpeglibhandler.h
+@@ -85,6 +85,7 @@ public:
+     // libavcodec
+     AVCodecContext*(*avcodec_alloc_context3)(const AVCodec* codec) = nullptr;
+     const AVCodec*(*avcodec_find_encoder)(AVCodecID id) = nullptr;
++    const AVCodec*(*avcodec_find_encoder_by_name)(const char* name) = nullptr;
+     const AVCodec*(*avcodec_find_decoder)(AVCodecID id) = nullptr;
+     void (*avcodec_free_context)(AVCodecContext** avctx) = nullptr;
+     int (*avcodec_open2)(AVCodecContext* avctx, const AVCodec* codec, AVDictionary** options) = nullptr;
+diff --git a/src/framework/media/internal/ffmpeg/v8/videoencoder.cpp b/src/framework/media/internal/ffmpeg/v8/videoencoder.cpp
+index 804b0b04..bd542541 100644
+--- a/src/framework/media/internal/ffmpeg/v8/videoencoder.cpp
++++ b/src/framework/media/internal/ffmpeg/v8/videoencoder.cpp
+@@ -140,7 +140,10 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+     m_ffmpeg->videoStream->time_base.num = 1;
+ 
+     // find the video encoder
+-    m_ffmpeg->codec = m_ffmpegHandler->avcodec_find_encoder(AV_CODEC_ID_H264);
++    m_ffmpeg->codec = options.hevcVideoToolbox
++                      ? (m_ffmpegHandler->avcodec_find_encoder_by_name
++                         ? m_ffmpegHandler->avcodec_find_encoder_by_name("hevc_videotoolbox") : nullptr)
++                      : m_ffmpegHandler->avcodec_find_encoder(AV_CODEC_ID_H264);
+     if (!m_ffmpeg->codec) {
+         LOGE() << "not found codec";
+         return false;
+@@ -152,7 +155,10 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+     }
+ 
+     m_ffmpeg->videoStream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+-    m_ffmpeg->videoStream->codecpar->codec_id = AV_CODEC_ID_H264;
++    m_ffmpeg->videoStream->codecpar->codec_id = options.hevcVideoToolbox ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
++    if (options.hevcVideoToolbox) {
++        m_ffmpeg->videoStream->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
++    }
+     m_ffmpeg->videoStream->codecpar->width = options.width;
+     m_ffmpeg->videoStream->codecpar->height = options.height;
+     m_ffmpeg->videoStream->codecpar->format = AV_PIX_FMT_YUV420P;
+@@ -164,7 +170,8 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+         return false;
+     }
+ 
+-    m_ffmpeg->codecCtx->profile = AV_PROFILE_H264_MAIN;
++    m_ffmpeg->codecCtx->profile = options.hevcVideoToolbox
++                                 ? AV_PROFILE_HEVC_MAIN : AV_PROFILE_H264_MAIN;
+     m_ffmpeg->codecCtx->time_base.den = options.fps;
+     m_ffmpeg->codecCtx->time_base.num = 1;
+     m_ffmpeg->codecCtx->gop_size = options.gop;
+@@ -666,7 +673,8 @@ bool VideoEncoder::addAudio(const io::path_t& audioPath)
+                 return false;
+             }
+             m_ffmpegHandler->avcodec_parameters_copy(outStream->codecpar, videoFmtCtx->streams[i]->codecpar);
+-            outStream->codecpar->codec_tag = 0;
++            outStream->codecpar->codec_tag = outStream->codecpar->codec_id == AV_CODEC_ID_HEVC
++                                            ? MKTAG('h', 'v', 'c', '1') : 0;
+             outStream->time_base = videoFmtCtx->streams[i]->time_base;
+             outVideoIdx = outStream->index;
+             break;
+diff --git a/src/framework/media/internal/ffmpeg/v9/ffmpeglibhandler.cpp b/src/framework/media/internal/ffmpeg/v9/ffmpeglibhandler.cpp
+index 345ad816..4418b313 100644
+--- a/src/framework/media/internal/ffmpeg/v9/ffmpeglibhandler.cpp
++++ b/src/framework/media/internal/ffmpeg/v9/ffmpeglibhandler.cpp
+@@ -87,6 +87,7 @@ bool FFmpegLibHandler::loadApi()
+     RESOLVE_FROM(m_avCodecLibrary, av_packet_rescale_ts);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_alloc_context3);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_find_encoder);
++    RESOLVE_FROM(m_avCodecLibrary, avcodec_find_encoder_by_name);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_find_decoder);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_free_context);
+     RESOLVE_FROM(m_avCodecLibrary, avcodec_open2);
+@@ -206,6 +207,7 @@ void FFmpegLibHandler::clearFunctions()
+     avio_context_free = nullptr;
+     avcodec_alloc_context3 = nullptr;
+     avcodec_find_encoder = nullptr;
++    avcodec_find_encoder_by_name = nullptr;
+     avcodec_find_decoder = nullptr;
+     avcodec_free_context = nullptr;
+     avcodec_open2 = nullptr;
+diff --git a/src/framework/media/internal/ffmpeg/v9/ffmpeglibhandler.h b/src/framework/media/internal/ffmpeg/v9/ffmpeglibhandler.h
+index 9674e437..17bf3a43 100644
+--- a/src/framework/media/internal/ffmpeg/v9/ffmpeglibhandler.h
++++ b/src/framework/media/internal/ffmpeg/v9/ffmpeglibhandler.h
+@@ -85,6 +85,7 @@ public:
+     // libavcodec
+     AVCodecContext*(*avcodec_alloc_context3)(const AVCodec* codec) = nullptr;
+     const AVCodec*(*avcodec_find_encoder)(AVCodecID id) = nullptr;
++    const AVCodec*(*avcodec_find_encoder_by_name)(const char* name) = nullptr;
+     const AVCodec*(*avcodec_find_decoder)(AVCodecID id) = nullptr;
+     void (*avcodec_free_context)(AVCodecContext** avctx) = nullptr;
+     int (*avcodec_open2)(AVCodecContext* avctx, const AVCodec* codec, AVDictionary** options) = nullptr;
+diff --git a/src/framework/media/internal/ffmpeg/v9/videoencoder.cpp b/src/framework/media/internal/ffmpeg/v9/videoencoder.cpp
+index ba2570b0..e8316566 100644
+--- a/src/framework/media/internal/ffmpeg/v9/videoencoder.cpp
++++ b/src/framework/media/internal/ffmpeg/v9/videoencoder.cpp
+@@ -140,7 +140,10 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+     m_ffmpeg->videoStream->time_base.num = 1;
+ 
+     // find the video encoder
+-    m_ffmpeg->codec = m_ffmpegHandler->avcodec_find_encoder(AV_CODEC_ID_H264);
++    m_ffmpeg->codec = options.hevcVideoToolbox
++                      ? (m_ffmpegHandler->avcodec_find_encoder_by_name
++                         ? m_ffmpegHandler->avcodec_find_encoder_by_name("hevc_videotoolbox") : nullptr)
++                      : m_ffmpegHandler->avcodec_find_encoder(AV_CODEC_ID_H264);
+     if (!m_ffmpeg->codec) {
+         LOGE() << "not found codec";
+         return false;
+@@ -152,7 +155,10 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+     }
+ 
+     m_ffmpeg->videoStream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+-    m_ffmpeg->videoStream->codecpar->codec_id = AV_CODEC_ID_H264;
++    m_ffmpeg->videoStream->codecpar->codec_id = options.hevcVideoToolbox ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
++    if (options.hevcVideoToolbox) {
++        m_ffmpeg->videoStream->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
++    }
+     m_ffmpeg->videoStream->codecpar->width = options.width;
+     m_ffmpeg->videoStream->codecpar->height = options.height;
+     m_ffmpeg->videoStream->codecpar->format = AV_PIX_FMT_YUV420P;
+@@ -164,7 +170,8 @@ bool VideoEncoder::open(const muse::io::path_t& fileName, const Options& options
+         return false;
+     }
+ 
+-    m_ffmpeg->codecCtx->profile = AV_PROFILE_H264_MAIN;
++    m_ffmpeg->codecCtx->profile = options.hevcVideoToolbox
++                                 ? AV_PROFILE_HEVC_MAIN : AV_PROFILE_H264_MAIN;
+     m_ffmpeg->codecCtx->time_base.den = options.fps;
+     m_ffmpeg->codecCtx->time_base.num = 1;
+     m_ffmpeg->codecCtx->gop_size = options.gop;
+@@ -666,7 +673,8 @@ bool VideoEncoder::addAudio(const io::path_t& audioPath)
+                 return false;
+             }
+             m_ffmpegHandler->avcodec_parameters_copy(outStream->codecpar, videoFmtCtx->streams[i]->codecpar);
+-            outStream->codecpar->codec_tag = 0;
++            outStream->codecpar->codec_tag = outStream->codecpar->codec_id == AV_CODEC_ID_HEVC
++                                            ? MKTAG('h', 'v', 'c', '1') : 0;
+             outStream->time_base = videoFmtCtx->streams[i]->time_base;
+             outVideoIdx = outStream->index;
+             break;
+diff --git a/src/framework/media/ivideoencoder.h b/src/framework/media/ivideoencoder.h
+index 3d4fd24d..30af2ce6 100644
+--- a/src/framework/media/ivideoencoder.h
++++ b/src/framework/media/ivideoencoder.h
+@@ -46,6 +46,7 @@ public:
+         unsigned bitrate = static_cast<unsigned>(-1);
+         unsigned gop = static_cast<unsigned>(-1);
+         unsigned fps = static_cast<unsigned>(-1);
++        bool hevcVideoToolbox = false;
+     };
+ 
+     virtual bool open(const muse::io::path_t& fileName, const Options& options) = 0;
 diff --git a/src/framework/mpe/qml/Muse/Mpe/articulationpatternitem.cpp b/src/framework/mpe/qml/Muse/Mpe/articulationpatternitem.cpp
 index 470e265a..6b4c4f8f 100644
 --- a/src/framework/mpe/qml/Muse/Mpe/articulationpatternitem.cpp
@@ -36923,6 +37904,467 @@ index adf9e1c1..ac3c9602 100644
          case SaveSoundTrackStage::WritingSoundTrack:
          case SaveSoundTrackStage::Unknown:
              m_progress.progress(current, total);
+diff --git a/src/importexport/videoexport/CMakeLists.txt b/src/importexport/videoexport/CMakeLists.txt
+index ea00755e..ac0aab92 100644
+--- a/src/importexport/videoexport/CMakeLists.txt
++++ b/src/importexport/videoexport/CMakeLists.txt
+@@ -33,6 +33,10 @@ target_sources(iex_videoexport PRIVATE
+ )
+ 
+ target_link_libraries(iex_videoexport PRIVATE Qt::Concurrent muse::media engraving)
++if(MUE_BUILD_NOTATIONSCENE_QML)
++    target_compile_definitions(iex_videoexport PRIVATE MUE_VIDEOEXPORT_PRACTICE)
++    target_link_libraries(iex_videoexport PRIVATE notationscene_qml Qt::Qml Qt::Quick)
++endif()
+ 
+ qt_add_resources(iex_videoexport iex_videoexport_resources
+     PREFIX
+diff --git a/src/importexport/videoexport/internal/videoexportconfiguration.cpp b/src/importexport/videoexport/internal/videoexportconfiguration.cpp
+index ffe499e4..df9c1a94 100644
+--- a/src/importexport/videoexport/internal/videoexportconfiguration.cpp
++++ b/src/importexport/videoexport/internal/videoexportconfiguration.cpp
+@@ -65,6 +65,9 @@ void VideoExportConfiguration::setPianoPosition(std::optional<PianoPosition> pos
+ 
+ std::string VideoExportConfiguration::resolution() const
+ {
++    if (viewMode() == ViewMode::Practice) {
++        return "2160p";
++    }
+     return m_resolution ? m_resolution.value() : DEFAULT_RESOLUTION;
+ }
+ 
+@@ -80,6 +83,9 @@ const std::vector<std::string>& VideoExportConfiguration::availableResolutions()
+ 
+ int VideoExportConfiguration::fps() const
+ {
++    if (viewMode() == ViewMode::Practice) {
++        return 30;
++    }
+     return m_fps ? m_fps.value() : DEFAULT_FPS;
+ }
+ 
+@@ -100,6 +106,9 @@ void VideoExportConfiguration::setLeadingSec(std::optional<double> leadingSec)
+ 
+ double VideoExportConfiguration::trailingSec() const
+ {
++    if (viewMode() == ViewMode::Practice) {
++        return 2.0;
++    }
+     return m_trailingSec ? m_trailingSec.value() : DEFAULT_TRAILING_SECONDS;
+ }
+ 
+diff --git a/src/importexport/videoexport/internal/videowriter.cpp b/src/importexport/videoexport/internal/videowriter.cpp
+index af48c39c..185d603b 100644
+--- a/src/importexport/videoexport/internal/videowriter.cpp
++++ b/src/importexport/videoexport/internal/videowriter.cpp
+@@ -22,9 +22,17 @@
+ #include "videowriter.h"
+ 
+ #include <cmath>
++#include <map>
+ 
++#include <QCoreApplication>
+ #include <QPainter>
+ #include <QThread>
++#ifdef MUE_VIDEOEXPORT_PRACTICE
++#include <QQmlContext>
++#include <QQmlEngine>
++#include "notationscene/inotationsceneconfiguration.h"
++#include "notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h"
++#endif
+ 
+ #include "global/concurrency/concurrent.h"
+ #include "io/buffer.h"
+@@ -33,6 +41,7 @@
+ #include "engraving/dom/page.h"
+ #include "engraving/dom/repeatlist.h"
+ #include "engraving/dom/masterscore.h"
++#include "engraving/dom/system.h"
+ 
+ #include "notation/imasternotation.h"
+ #include "notation/notationtypes.h"
+@@ -43,6 +52,7 @@
+ 
+ #include "defer.h"
+ #include "log.h"
++#include "settings.h"
+ 
+ using namespace mu::iex::videoexport;
+ using namespace mu::project;
+@@ -103,6 +113,9 @@ muse::Ret VideoWriter::write(INotationPtr notation, muse::io::IODevice& device,
+     bool withAudio = muse::value(options, OptionKey::WITH_AUDIO, muse::Val(true)).toBool();
+ 
+     Config cfg = makeConfig();
++    if (cfg.viewMode == ViewMode::Practice) {
++        return writePractice(notation, device, cfg);
++    }
+ 
+     muse::io::path_t finalPath(filePath);
+     muse::io::path_t tempAudioPath = finalPath + ".tmp_audio.aac";
+@@ -225,10 +238,258 @@ VideoWriter::Config VideoWriter::makeConfig() const
+     cfg.trailingSec = configuration()->trailingSec();
+ 
+     cfg.viewMode = configuration()->viewMode();
++    if (cfg.viewMode == ViewMode::Practice) {
++        cfg.width = 3840;
++        cfg.height = 2160;
++        cfg.fps = 30;
++        cfg.bitrate = 40000000;
++        cfg.leadingSec = 0;
++        cfg.trailingSec = 2;
++    }
+ 
+     return cfg;
+ }
+ 
++muse::Ret VideoWriter::writePractice(INotationPtr notation, muse::io::IODevice& device, Config config)
++{
++#ifndef MUE_VIDEOEXPORT_PRACTICE
++    (void)notation;
++    (void)device;
++    (void)config;
++    return muse::Ret(static_cast<int>(muse::Ret::Code::NotSupported), "Practice video requires the notation scene QML module");
++#else
++    if (QThread::currentThread() != QCoreApplication::instance()->thread()) {
++        return muse::Ret(static_cast<int>(muse::Ret::Code::NotSupported), "Practice video must run on the GUI thread");
++    }
++    if (!uiConfiguration() || !notationConfiguration() || !playbackController()) {
++        return make_ret(muse::Ret::Code::InternalError);
++    }
++    m_abort = false;
++    m_isCompleted = true;
++    m_audioCompleted = true;
++    m_isPracticeExport = true;
++    DEFER {
++        m_isPracticeExport = false;
++    };
++    muse::settings()->beginTransaction(false);
++    DEFER {
++        muse::settings()->rollbackTransaction(false);
++    };
++    uiConfiguration()->setCurrentTheme(muse::ui::HIGH_CONTRAST_BLACK_THEME_CODE);
++    notationConfiguration()->setScoreInversionEnabled(true);
++    notationConfiguration()->setOnlyInvertInDarkTheme(false);
++    notationConfiguration()->setIsMetronomeEnabled(true);
++    if (uiConfiguration()->currentTheme().codeKey != muse::ui::HIGH_CONTRAST_BLACK_THEME_CODE
++        || !notationConfiguration()->shouldInvertScore()) {
++        return make_ret(muse::Ret::Code::InternalError);
++    }
++    auto restoreData = prepareScore(notation, config);
++    if (!restoreData) {
++        return make_ret(muse::Ret::Code::BadData);
++    }
++    DEFER {
++        restoreScore(notation, *restoreData);
++    };
++    auto playback = notation->masterNotation()->playback();
++    double countInSec = playback->setExportCountIn(true);
++    if (countInSec <= 0) {
++        return muse::Ret(static_cast<int>(muse::Ret::Code::BadData), "Cannot generate practice count-in");
++    }
++    DEFER {
++        playback->setExportCountIn(false);
++    };
++    const muse::io::path_t outputPath(device.meta("file_path"));
++    const muse::io::path_t audioPath = outputPath + ".tmp_audio.aac";
++    DEFER {
++        if (m_audioWriter) {
++            m_audioWriter->progress()->finished().disconnect(this);
++            m_audioWriter = nullptr;
++        }
++        muse::io::File::remove(audioPath);
++    };
++    m_audioCompleted = false;
++    m_audioRet = muse::Ret();
++    startAudioExport(notation, audioPath, config);
++    while (!m_audioCompleted) {
++        application()->processEvents();
++        QThread::yieldCurrentThread();
++    }
++    playback->setExportCountIn(false);
++    if (m_abort) {
++        return make_ret(muse::Ret::Code::Cancel);
++    }
++    if (!m_audioRet) {
++        return m_audioRet;
++    }
++    auto encoder = videoEncodeResolver()->currentVideoEncoder();
++    if (!encoder) {
++        return make_ret(muse::Ret::Code::NotSupported);
++    }
++    muse::media::IVideoEncoder::Options encoderOptions;
++    encoderOptions.format = "mp4";
++    encoderOptions.width = config.width;
++    encoderOptions.height = config.height;
++    encoderOptions.fps = config.fps;
++    encoderOptions.gop = config.fps / 2;
++    encoderOptions.bitrate = config.bitrate;
++    encoderOptions.hevcVideoToolbox = true;
++    DEFER {
++        encoder->close();
++    };
++    if (!encoder->open(outputPath, encoderOptions)) {
++        return muse::Ret(static_cast<int>(muse::Ret::Code::NotSupported), "Cannot open hevc_videotoolbox for practice video");
++    }
++    m_progress.start();
++    muse::Ret result = generatePracticeFrames(encoder, notation, config, countInSec);
++    encoder->finishEncode();
++    device.close();
++    if (result && !encoder->addAudio(audioPath)) {
++        result = make_ret(muse::Ret::Code::UnknownError);
++    }
++    m_progress.finish(result);
++    return result;
++#endif
++}
++
++muse::Ret VideoWriter::generatePracticeFrames(muse::media::IVideoEncoderPtr encoder, INotationPtr notation,
++                                             const Config& config, double countInSec)
++{
++#ifndef MUE_VIDEOEXPORT_PRACTICE
++    (void)encoder;
++    (void)notation;
++    (void)config;
++    (void)countInSec;
++    return make_ret(muse::Ret::Code::NotSupported);
++#else
++    QQmlEngine engine;
++    muse::QmlIoCContext qmlContext(&engine);
++    qmlContext.ctx = iocContext();
++    engine.rootContext()->setContextProperty("ioc_context", QVariant::fromValue(&qmlContext));
++    PianoKeyboardView keyboard;
++    QQmlEngine::setContextForObject(&keyboard, engine.rootContext());
++    keyboard.setNumberOfKeys(DEFAULT_PIANO_KEYBOARD_NUMBER_OF_KEYS);
++    keyboard.setWidth(config.width);
++    keyboard.init();
++    keyboard.setHeight(std::ceil(keyboard.fittedHeight()));
++    auto score = notation->elements()->msScore();
++    auto playback = notation->masterNotation()->playback();
++    const auto& repeats = notation->masterNotation()->masterScore()->repeatList(notationConfiguration()->isPlayRepeatsEnabled());
++    struct SystemPosition {
++        tick_t playedTick;
++        const engraving::System* system;
++    };
++    std::vector<SystemPosition> positions;
++    std::map<const engraving::System*, muse::RectF> bounds;
++    for (const auto* repeat : repeats) {
++        for (const auto* measure : repeat->measureList()) {
++            const auto* displayedMeasure = score->tick2measureMM(measure->tick());
++            const auto* system = displayedMeasure ? displayedMeasure->system() : nullptr;
++            if (!system || !system->page()) {
++                continue;
++            }
++            if (positions.empty() || positions.back().system != system) {
++                positions.push_back({ static_cast<tick_t>(repeat->utick + measure->tick().ticks() - repeat->tick), system });
++            }
++            if (bounds.find(system) != bounds.end()) {
++                continue;
++            }
++            muse::RectF rect = system->canvasBoundingRect();
++            auto* page = system->page();
++            for (const auto* item : page->items(page->ldata()->bbox())) {
++                if (item->visible() && item->findAncestor(engraving::ElementType::SYSTEM) == system) {
++                    rect = rect.united(item->canvasBoundingRect());
++                }
++            }
++            double padding = score->style().spatium() * 4;
++            bounds.emplace(system, rect.adjusted(-padding, -padding, padding, padding));
++        }
++    }
++    if (positions.empty() || repeats.ticks() <= 0 || keyboard.height() >= config.height) {
++        return make_ret(muse::Ret::Code::BadData);
++    }
++    QImage frame(config.width, config.height, QImage::Format_RGB32);
++    if (frame.isNull()) {
++        return make_ret(muse::Ret::Code::InternalError);
++    }
++    frame.setDotsPerMeterX(std::lrint(engraving::DPI * 1000 / engraving::INCH));
++    frame.setDotsPerMeterY(std::lrint(engraving::DPI * 1000 / engraving::INCH));
++    QPainter qp(&frame);
++    if (!qp.isActive()) {
++        return make_ret(muse::Ret::Code::InternalError);
++    }
++    qp.setRenderHint(QPainter::Antialiasing);
++    qp.setRenderHint(QPainter::TextAntialiasing);
++    Painter painter(&qp, "practice_video");
++    PlaybackCursor cursor(iocContext());
++    cursor.setNotation(notation);
++    auto previousNotation = globalContext()->currentNotation();
++    playbackController()->setNotation(notation);
++    const auto audibleTracks = playbackController()->audibleInstrumentTrackIds();
++    DEFER {
++        playbackController()->setNotation(previousNotation);
++    };
++    const double duration = playback->totalPlayTime();
++    const int songFrames = static_cast<int>(std::ceil((countInSec + duration) * config.fps));
++    const int trailingFrames = static_cast<int>(config.trailingSec * config.fps);
++    const int totalFrames = songFrames + trailingFrames;
++    size_t position = 0;
++    const double slotHeight = (config.height - keyboard.height()) / 2;
++    for (int f = 0; f < totalFrames; ++f) {
++        if (m_abort) {
++            return make_ret(muse::Ret::Code::Cancel);
++        }
++        m_progress.progress(f, totalFrames);
++        if (f < songFrames) {
++            const double time = static_cast<double>(f) / config.fps - countInSec;
++            const bool countingIn = time < 0;
++            const tick_t playedTick = countingIn ? 0
++                                      : std::min(playback->secToPlayedTick(time), static_cast<tick_t>(repeats.ticks() - 1));
++            while (position + 1 < positions.size() && playedTick >= positions[position + 1].playedTick) {
++                ++position;
++            }
++            const auto* first = positions[position].system;
++            const auto* next = position + 1 < positions.size() ? positions[position + 1].system : nullptr;
++            const auto& firstRect = bounds.at(first);
++            const auto nextRect = next ? bounds.at(next) : firstRect;
++            const double scale = std::min((config.width - 96.0) / std::max(firstRect.width(), nextRect.width()),
++                                          (slotHeight - 96.0) / std::max(firstRect.height(), nextRect.height()));
++            if (!std::isfinite(scale) || scale <= 0) {
++                return make_ret(muse::Ret::Code::BadData);
++            }
++            qp.fillRect(frame.rect(), Qt::black);
++            keyboard.paintPlayback(&qp, playback, audibleTracks,
++                                   countingIn ? std::nullopt : std::optional<muse::audio::secs_t>(time));
++            cursor.setVisible(!countingIn);
++            cursor.move(repeats.utick2tick(playedTick));
++            const auto paintSystem = [&](const engraving::System* system, int slot) {
++                if (!system) {
++                    return;
++                }
++                const auto& rect = bounds.at(system);
++                painter.save();
++                painter.translate((config.width - rect.width() * scale) / 2,
++                                  keyboard.height() + slot * slotHeight + (slotHeight - rect.height() * scale) / 2);
++                painter.scale(scale, scale);
++                painter.translate(-rect.topLeft());
++                painter.setClipRect(rect);
++                notation->painting()->paintSystem(&painter, system);
++                if (slot == 0) {
++                    cursor.paint(&painter);
++                }
++                painter.restore();
++            };
++            paintSystem(first, 0);
++            paintSystem(next, 1);
++        }
++        if (!encoder->encodeImage(frame)) {
++            return make_ret(muse::Ret::Code::UnknownError);
++        }
++        application()->processEvents();
++    }
++    return muse::make_ok();
++#endif
++}
++
+ void VideoWriter::startVideoExport(muse::media::IVideoEncoderPtr encoder, INotationPtr notation, const Config& cfg)
+ {
+     muse::Concurrent::run([this, encoder, notation, cfg]() {
+@@ -260,7 +521,11 @@ void VideoWriter::startAudioExport(INotationPtr notation, const muse::io::path_t
+     audioDevice.setMeta("file_path", audioPath.toStdString());
+     audioDevice.open(muse::io::IODevice::WriteOnly);
+ 
+-    m_audioWriter->write(notation, audioDevice, audioOpts);
++    muse::Ret ret = m_audioWriter->write(notation, audioDevice, audioOpts);
++    if (cfg.viewMode == ViewMode::Practice && ret.valid() && !ret && !m_audioCompleted) {
++        m_audioRet = ret;
++        m_audioCompleted = true;
++    }
+ }
+ 
+ muse::Ret VideoWriter::writeList(const INotationPtrList&, muse::io::IODevice&, const Options&)
+@@ -281,6 +546,10 @@ void VideoWriter::abort()
+     if (m_audioWriter) {
+         m_audioWriter->abort();
+     }
++    if (m_isPracticeExport) {
++        m_audioCompleted = true;
++        return;
++    }
+ 
+     // Wait abort completion
+     while (!m_isCompleted || !m_audioCompleted) {
+@@ -316,6 +585,11 @@ std::optional<VideoWriter::ScoreRestoreData> VideoWriter::prepareScore(INotation
+         score->setShowInstrumentNames(false);
+         score->setShowVBox(false);
+     }
++    if (config.viewMode == ViewMode::Practice) {
++        score->setShowVBox(false);
++        score->style().set(engraving::Sid::showHeader, false);
++        score->style().set(engraving::Sid::showFooter, false);
++    }
+ 
+     score->doLayout();
+ 
+@@ -327,6 +601,9 @@ std::optional<VideoWriter::ScoreRestoreData> VideoWriter::prepareScore(INotation
+     }
+ 
+     const Page* page = pages.front();
++    if (config.viewMode == ViewMode::Practice) {
++        return result;
++    }
+ 
+     if (config.viewMode == ViewMode::PageFull) {
+         double scaleX = config.width / page->width();
+diff --git a/src/importexport/videoexport/internal/videowriter.h b/src/importexport/videoexport/internal/videowriter.h
+index 6af8b95a..8ed4bc17 100644
+--- a/src/importexport/videoexport/internal/videowriter.h
++++ b/src/importexport/videoexport/internal/videowriter.h
+@@ -32,6 +32,9 @@
+ #include "media/ivideoencoderresolver.h"
+ #include "../ivideoexportconfiguration.h"
+ #include "context/iglobalcontext.h"
++#include "notation/inotationconfiguration.h"
++#include "playback/iplaybackcontroller.h"
++#include "ui/iuiconfiguration.h"
+ 
+ #include "project/inotationwriter.h"
+ #include "project/inotationwritersregister.h"
+@@ -46,11 +49,14 @@ namespace mu::iex::videoexport {
+ class VideoWriter : public project::INotationWriter, public muse::Contextable, public muse::async::Asyncable
+ {
+     muse::GlobalInject<IVideoExportConfiguration> configuration;
++    muse::GlobalInject<notation::INotationConfiguration> notationConfiguration;
++    muse::GlobalInject<muse::ui::IUiConfiguration> uiConfiguration;
+     muse::GlobalInject<muse::io::IFileSystem> fileSystem;
+     muse::ContextInject<muse::IApplication> application = { this };
+     muse::ContextInject<muse::media::IVideoEncoderResolver> videoEncodeResolver = { this };
+     muse::ContextInject<project::INotationWritersRegister> writers = { this };
+     muse::ContextInject<context::IGlobalContext> globalContext = { this };
++    muse::ContextInject<playback::IPlaybackController> playbackController = { this };
+ 
+ public:
+     explicit VideoWriter(const muse::modularity::ContextPtr& iocCtx)
+@@ -81,6 +87,9 @@ private:
+     };
+ 
+     Config makeConfig() const;
++    muse::Ret writePractice(notation::INotationPtr notation, muse::io::IODevice& device, Config config);
++    muse::Ret generatePracticeFrames(muse::media::IVideoEncoderPtr encoder, notation::INotationPtr notation,
++                                     const Config& config, double countInSec);
+ 
+     void startVideoExport(muse::media::IVideoEncoderPtr encoder, notation::INotationPtr notation, const Config& cfg);
+     void startAudioExport(notation::INotationPtr notation, const muse::io::path_t& audioPath, const Config& cfg);
+@@ -113,6 +122,7 @@ private:
+ 
+     muse::Progress m_progress;
+     bool m_abort = false;
++    bool m_isPracticeExport = false;
+     bool m_isCompleted = false;
+     muse::Ret m_writeRet;
+ 
+diff --git a/src/importexport/videoexport/videoexporttypes.h b/src/importexport/videoexport/videoexporttypes.h
+index 4a80a3f7..1e66405c 100644
+--- a/src/importexport/videoexport/videoexporttypes.h
++++ b/src/importexport/videoexport/videoexporttypes.h
+@@ -26,6 +26,7 @@ namespace mu::iex::videoexport {
+ enum ViewMode {
+     PageFull,
+     Flexible,
++    Practice,
+ };
+ 
+ enum PianoPosition {
 diff --git a/src/instrumentsscene/internal/instrumentsactionscontroller.cpp b/src/instrumentsscene/internal/instrumentsactionscontroller.cpp
 index b0592c69..16e03f75 100644
 --- a/src/instrumentsscene/internal/instrumentsactionscontroller.cpp
@@ -37062,11 +38504,23 @@ index cc2195e7..d3ed2038 100644
      virtual void onRealtimeAdvance() = 0;
  };
  
+diff --git a/src/notation/inotationpainting.h b/src/notation/inotationpainting.h
+index ced10d22..1fd89322 100644
+--- a/src/notation/inotationpainting.h
++++ b/src/notation/inotationpainting.h
+@@ -46,6 +46,7 @@ public:
+     virtual muse::SizeF pageSizeInch(const Options& opt) const = 0;
+ 
+     virtual void paintView(muse::draw::Painter* painter, const muse::RectF& frameRect, bool isPrinting) = 0;
++    virtual void paintSystem(muse::draw::Painter* painter, const engraving::System* system) = 0;
+     virtual void paintPdf(muse::draw::Painter* painter, const Options& opt) = 0;
+     virtual void paintPrint(muse::draw::Painter* painter, const Options& opt) = 0;
+     virtual void paintPng(muse::draw::Painter* painter, const Options& opt) = 0;
 diff --git a/src/notation/inotationplayback.h b/src/notation/inotationplayback.h
-index e78d38eb..c9a7c25d 100644
+index e78d38eb..970da855 100644
 --- a/src/notation/inotationplayback.h
 +++ b/src/notation/inotationplayback.h
-@@ -53,6 +53,9 @@ public:
+@@ -53,9 +53,13 @@ public:
      virtual std::vector<muse::midi::note_idx_t> activePlaybackPitches(
          muse::audio::secs_t position, const engraving::InstrumentTrackIdSet& includedTracks) const = 0;
  
@@ -37076,6 +38530,10 @@ index e78d38eb..c9a7c25d 100644
      virtual void triggerEventsForItems(const std::vector<const EngravingItem*>& items, muse::mpe::duration_t duration, bool flushSound) = 0;
      virtual void triggerMetronome(muse::midi::tick_t tick) = 0;
      virtual void triggerCountIn(muse::midi::tick_t tick, muse::secs_t& countInDuration) = 0;
++    virtual muse::secs_t setExportCountIn(bool enabled) = 0;
+     virtual void triggerControllers(const muse::mpe::ControllerChangeEventList& list, notation::staff_idx_t staffIdx, int tick) = 0;
+ 
+     virtual engraving::InstrumentTrackIdSet existingTrackIdSet() const = 0;
 diff --git a/src/notation/internal/notationconfiguration.cpp b/src/notation/internal/notationconfiguration.cpp
 index 32155614..7328a5df 100644
 --- a/src/notation/internal/notationconfiguration.cpp
@@ -37138,8 +38596,77 @@ index 03e7bf36..3f240a03 100644
      QTimer m_processTimer;
      std::vector<muse::midi::Event> m_eventsQueue;
  
+diff --git a/src/notation/internal/notationpainting.cpp b/src/notation/internal/notationpainting.cpp
+index e2fbfef2..2345b3fc 100644
+--- a/src/notation/internal/notationpainting.cpp
++++ b/src/notation/internal/notationpainting.cpp
+@@ -24,6 +24,8 @@
+ #include <QScreen>
+ 
+ #include "engraving/dom/score.h"
++#include "engraving/dom/page.h"
++#include "engraving/dom/system.h"
+ 
+ #include "notation.h"
+ #include "notationinteraction.h"
+@@ -119,13 +121,15 @@ void NotationPainting::doPaint(Painter* painter, const Options& opt)
+ 
+     Options myopt = opt;
+     bool printPageBackground = myopt.printPageBackground;
+-    myopt.onPaintPageSheet = [this, printPageBackground](Painter* painter, const Page* page, const RectF& pageRect) {
+-        paintPageSheet(painter, page, pageRect, printPageBackground);
+-    };
++    if (!myopt.onlySystem) {
++        myopt.onPaintPageSheet = [this, printPageBackground](Painter* painter, const Page* page, const RectF& pageRect) {
++            paintPageSheet(painter, page, pageRect, printPageBackground);
++        };
++    }
+ 
+     scoreRenderer()->paintScore(painter, score(), myopt);
+ 
+-    if (!myopt.isPrinting) {
++    if (!myopt.isPrinting && !myopt.onlySystem) {
+         rendering::PaintOptions eopt;
+         eopt.isPrinting = myopt.isPrinting;
+         eopt.invertColors = myopt.invertColors;
+@@ -195,6 +199,23 @@ void NotationPainting::paintView(Painter* painter, const RectF& frameRect, bool
+     doPaint(painter, opt);
+ }
+ 
++void NotationPainting::paintSystem(Painter* painter, const engraving::System* system)
++{
++    if (!system || !system->page()) {
++        return;
++    }
++    Options opt;
++    opt.isSetViewport = false;
++    opt.isMultiPage = true;
++    opt.printPageBackground = false;
++    opt.fromPage = static_cast<int>(system->page()->pageNumber());
++    opt.toPage = opt.fromPage;
++    opt.onlySystem = system;
++    opt.showSelection = false;
++    opt.invertColors = configuration()->shouldInvertScore();
++    doPaint(painter, opt);
++}
++
+ void NotationPainting::paintPdf(Painter* painter, const Options& opt)
+ {
+     Q_ASSERT(opt.deviceDpi > 0);
+diff --git a/src/notation/internal/notationpainting.h b/src/notation/internal/notationpainting.h
+index 2a48af46..bff47555 100644
+--- a/src/notation/internal/notationpainting.h
++++ b/src/notation/internal/notationpainting.h
+@@ -56,6 +56,7 @@ public:
+     muse::SizeF pageSizeInch(const Options& opt) const override;
+ 
+     void paintView(muse::draw::Painter* painter, const muse::RectF& frameRect, bool isPrinting) override;
++    void paintSystem(muse::draw::Painter* painter, const engraving::System* system) override;
+     void paintPdf(muse::draw::Painter* painter, const Options& opt) override;
+     void paintPrint(muse::draw::Painter* painter, const Options& opt) override;
+     void paintPng(muse::draw::Painter* painter, const Options& opt) override;
 diff --git a/src/notation/internal/notationplayback.cpp b/src/notation/internal/notationplayback.cpp
-index 857ca57e..32d0068a 100644
+index 857ca57e..5d757358 100644
 --- a/src/notation/internal/notationplayback.cpp
 +++ b/src/notation/internal/notationplayback.cpp
 @@ -48,7 +48,6 @@ using namespace mu;
@@ -37191,7 +38718,34 @@ index 857ca57e..32d0068a 100644
  void NotationPlayback::triggerEventsForItems(const std::vector<const EngravingItem*>& items, muse::mpe::duration_t duration,
                                               bool flushSound)
  {
-@@ -266,12 +290,12 @@ muse::async::Channel<muse::audio::secs_t> NotationPlayback::totalPlayTimeChanged
+@@ -209,6 +233,17 @@ void NotationPlayback::triggerControllers(const muse::mpe::ControllerChangeEvent
+     m_playbackModel.sendOffStreamEvents(trackId, events, {}, false /*flushOffstream*/);
+ }
+ 
++muse::secs_t NotationPlayback::setExportCountIn(bool enabled)
++{
++    const auto duration = m_playbackModel.setExportCountIn(enabled);
++    if (duration < 0) {
++        return -1;
++    }
++    m_exportCountInDuration = audio::microsecsToSecs(duration);
++    updateTotalPlayTime();
++    return m_exportCountInDuration;
++}
++
+ InstrumentTrackIdSet NotationPlayback::existingTrackIdSet() const
+ {
+     return m_playbackModel.existingTrackIdSet();
+@@ -246,7 +281,7 @@ void NotationPlayback::updateTotalPlayTime()
+ 
+     int lastTick = score->repeatList(m_playbackModel.isPlayRepeatsEnabled()).ticks();
+     audio::secs_t newPlayTime = score->utick2utime(lastTick);
+-    newPlayTime += PLAYBACK_TAIL_SECS;
++    newPlayTime += PLAYBACK_TAIL_SECS + m_exportCountInDuration;
+ 
+     if (m_totalPlayTime == newPlayTime) {
+         return;
+@@ -266,12 +301,12 @@ muse::async::Channel<muse::audio::secs_t> NotationPlayback::totalPlayTimeChanged
      return m_totalPlayTimeChanged;
  }
  
@@ -37206,7 +38760,7 @@ index 857ca57e..32d0068a 100644
  {
      if (!score()) {
          return 0;
-@@ -280,13 +304,13 @@ tick_t NotationPlayback::secToPlayedTick(muse::audio::secs_t sec) const
+@@ -280,13 +315,13 @@ tick_t NotationPlayback::secToPlayedTick(muse::audio::secs_t sec) const
      return score()->utime2utick(sec);
  }
  
@@ -37222,7 +38776,7 @@ index 857ca57e..32d0068a 100644
  
      return score()->repeatList(m_playbackModel.isPlayRepeatsEnabled()).utick2tick(utick);
  }
-@@ -315,7 +339,7 @@ RetVal<muse::midi::tick_t> NotationPlayback::playPositionTickByElement(const Eng
+@@ -315,7 +350,7 @@ RetVal<muse::midi::tick_t> NotationPlayback::playPositionTickByElement(const Eng
      return playPositionTickByRawTick(element->tick().ticks());
  }
  
@@ -37231,7 +38785,7 @@ index 857ca57e..32d0068a 100644
  {
      const Measure* first = score()->firstMeasure();
      const Measure* last = score()->lastMeasure();
-@@ -400,7 +424,7 @@ Notification NotationPlayback::loopBoundariesChanged() const
+@@ -400,7 +435,7 @@ Notification NotationPlayback::loopBoundariesChanged() const
      return m_loopBoundariesChanged;
  }
  
@@ -37240,7 +38794,7 @@ index 857ca57e..32d0068a 100644
  {
      if (!score()) {
          static Tempo empty;
-@@ -412,12 +436,12 @@ const Tempo& NotationPlayback::multipliedTempo(tick_t tick) const
+@@ -412,12 +447,12 @@ const Tempo& NotationPlayback::multipliedTempo(tick_t tick) const
      return m_currentTempo;
  }
  
@@ -37256,10 +38810,10 @@ index 857ca57e..32d0068a 100644
      return score() ? score()->sigmap()->bar2tick(measureIndex, beatIndex) : 0;
  }
 diff --git a/src/notation/internal/notationplayback.h b/src/notation/internal/notationplayback.h
-index ae3c0138..4915afe9 100644
+index ae3c0138..b9189ccf 100644
 --- a/src/notation/internal/notationplayback.h
 +++ b/src/notation/internal/notationplayback.h
-@@ -58,6 +58,9 @@ public:
+@@ -58,9 +58,13 @@ public:
      std::vector<muse::midi::note_idx_t> activePlaybackPitches(
          muse::audio::secs_t position, const engraving::InstrumentTrackIdSet& includedTracks) const override;
  
@@ -37269,8 +38823,20 @@ index ae3c0138..4915afe9 100644
      void triggerEventsForItems(const std::vector<const EngravingItem*>& items, muse::mpe::duration_t duration, bool flushSound) override;
      void triggerMetronome(muse::midi::tick_t tick) override;
      void triggerCountIn(muse::midi::tick_t tick, muse::secs_t& countInDuration) override;
++    muse::secs_t setExportCountIn(bool enabled) override;
+     void triggerControllers(const muse::mpe::ControllerChangeEventList& list, notation::staff_idx_t staffIdx, int tick) override;
+ 
+     engraving::InstrumentTrackIdSet existingTrackIdSet() const override;
+@@ -115,6 +119,7 @@ private:
+     muse::async::Notification m_loopBoundariesChanged;
+ 
+     muse::audio::secs_t m_totalPlayTime = 0;
++    muse::secs_t m_exportCountInDuration = 0;
+     muse::async::Channel<muse::audio::secs_t> m_totalPlayTimeChanged;
+ 
+     mutable Tempo m_currentTempo;
 diff --git a/src/notation/internal/notationplaybackstub.cpp b/src/notation/internal/notationplaybackstub.cpp
-index 6b5d208b..4a1d3678 100644
+index 6b5d208b..17d576f7 100644
 --- a/src/notation/internal/notationplaybackstub.cpp
 +++ b/src/notation/internal/notationplaybackstub.cpp
 @@ -25,7 +25,6 @@ using namespace mu;
@@ -37293,7 +38859,19 @@ index 6b5d208b..4a1d3678 100644
  void NotationPlaybackStub::triggerEventsForItems(const std::vector<const EngravingItem*>&, muse::mpe::duration_t, bool)
  {
  }
-@@ -122,17 +126,17 @@ muse::async::Channel<muse::audio::secs_t> NotationPlaybackStub::totalPlayTimeCha
+@@ -112,6 +116,11 @@ muse::async::Channel<InstrumentTrackId> NotationPlaybackStub::trackRemoved() con
+     return muse::async::Channel<InstrumentTrackId>();
+ }
+ 
++muse::secs_t NotationPlaybackStub::setExportCountIn(bool enabled)
++{
++    return enabled ? -1 : 0;
++}
++
+ muse::audio::secs_t NotationPlaybackStub::totalPlayTime() const
+ {
+     return muse::audio::secs_t();
+@@ -122,17 +131,17 @@ muse::async::Channel<muse::audio::secs_t> NotationPlaybackStub::totalPlayTimeCha
      return muse::async::Channel<muse::audio::secs_t>();
  }
  
@@ -37314,7 +38892,7 @@ index 6b5d208b..4a1d3678 100644
  {
      return 0;
  }
-@@ -147,7 +151,7 @@ RetVal<muse::midi::tick_t> NotationPlaybackStub::playPositionTickByElement(const
+@@ -147,7 +156,7 @@ RetVal<muse::midi::tick_t> NotationPlaybackStub::playPositionTickByElement(const
      return RetVal<muse::midi::tick_t>::make_ok(0);
  }
  
@@ -37323,7 +38901,7 @@ index 6b5d208b..4a1d3678 100644
  {
  }
  
-@@ -171,18 +175,18 @@ Notification NotationPlaybackStub::loopBoundariesChanged() const
+@@ -171,18 +180,18 @@ Notification NotationPlaybackStub::loopBoundariesChanged() const
      return Notification();
  }
  
@@ -37346,10 +38924,10 @@ index 6b5d208b..4a1d3678 100644
      return 0;
  }
 diff --git a/src/notation/internal/notationplaybackstub.h b/src/notation/internal/notationplaybackstub.h
-index 1d6f8f6b..9ac9f3df 100644
+index 1d6f8f6b..93c1cc29 100644
 --- a/src/notation/internal/notationplaybackstub.h
 +++ b/src/notation/internal/notationplaybackstub.h
-@@ -45,6 +45,9 @@ public:
+@@ -45,9 +45,13 @@ public:
      std::vector<muse::midi::note_idx_t> activePlaybackPitches(
          muse::audio::secs_t position, const engraving::InstrumentTrackIdSet& includedTracks) const override;
  
@@ -37359,6 +38937,10 @@ index 1d6f8f6b..9ac9f3df 100644
      void triggerEventsForItems(const std::vector<const EngravingItem*>& items, muse::mpe::duration_t duration, bool flushSound) override;
      void triggerMetronome(muse::midi::tick_t tick) override;
      void triggerCountIn(muse::midi::tick_t tick, muse::secs_t& countInDuration) override;
++    muse::secs_t setExportCountIn(bool enabled) override;
+     void triggerControllers(const muse::mpe::ControllerChangeEventList& list, notation::staff_idx_t staffIdx, int tick) override;
+ 
+     engraving::InstrumentTrackIdSet existingTrackIdSet() const override;
 diff --git a/src/notation/tests/mocks/msczreadermock.h b/src/notation/tests/mocks/msczreadermock.h
 index 1ba9b15c..fdea0510 100644
 --- a/src/notation/tests/mocks/msczreadermock.h
@@ -37371,6 +38953,19 @@ index 1ba9b15c..fdea0510 100644
  };
  }
  
+diff --git a/src/notationscene/inotationsceneconfiguration.h b/src/notationscene/inotationsceneconfiguration.h
+index 237894ac..32adab4b 100644
+--- a/src/notationscene/inotationsceneconfiguration.h
++++ b/src/notationscene/inotationsceneconfiguration.h
+@@ -29,6 +29,8 @@
+ #include "notationscenetypes.h"
+ 
+ namespace mu::notation {
++inline constexpr int DEFAULT_PIANO_KEYBOARD_NUMBER_OF_KEYS = 61;
++
+ class INotationSceneConfiguration : MODULE_GLOBAL_INTERFACE
+ {
+     INTERFACE_ID(INotationSceneConfiguration)
 diff --git a/src/notationscene/internal/notationactioncontroller.cpp b/src/notationscene/internal/notationactioncontroller.cpp
 index 421b5d65..9a0dbafa 100644
 --- a/src/notationscene/internal/notationactioncontroller.cpp
@@ -37396,7 +38991,7 @@ index 421b5d65..9a0dbafa 100644
      if (code == UNDO_ACTION_CODE) {
          return canUndo();
 diff --git a/src/notationscene/internal/notationsceneconfiguration.cpp b/src/notationscene/internal/notationsceneconfiguration.cpp
-index 4c5ef13c..9551fa03 100644
+index 4c5ef13c..79729e48 100644
 --- a/src/notationscene/internal/notationsceneconfiguration.cpp
 +++ b/src/notationscene/internal/notationsceneconfiguration.cpp
 @@ -62,7 +62,7 @@ void NotationSceneConfiguration::init()
@@ -37404,7 +38999,7 @@ index 4c5ef13c..9551fa03 100644
      });
  
 -    settings()->setDefaultValue(PIANO_KEYBOARD_NUMBER_OF_KEYS, Val(88));
-+    settings()->setDefaultValue(PIANO_KEYBOARD_NUMBER_OF_KEYS, Val(61));
++    settings()->setDefaultValue(PIANO_KEYBOARD_NUMBER_OF_KEYS, Val(DEFAULT_PIANO_KEYBOARD_NUMBER_OF_KEYS));
      m_pianoKeyboardNumberOfKeys.val = settings()->value(PIANO_KEYBOARD_NUMBER_OF_KEYS).toInt();
      settings()->valueChanged(PIANO_KEYBOARD_NUMBER_OF_KEYS).onReceive(this, [this](const Val& val) {
          m_pianoKeyboardNumberOfKeys.set(val.toInt());
@@ -38095,7 +39690,7 @@ index e3298a26..95006d8f 100644
  
      QList<INotationPtr> m_notations;
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.cpp b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.cpp
-index afcbf4be..b3a9fbd8 100644
+index afcbf4be..a142fee1 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.cpp
 +++ b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.cpp
 @@ -21,13 +21,15 @@
@@ -38149,19 +39744,19 @@ index afcbf4be..b3a9fbd8 100644
 -        return KeyState::Played;
 +    if (key >= m_playbackKeys.size()) {
 +        return 0;
-+    }
+     }
 +    if (m_pressedKey == key) {
-+        return 1;
++        return livePlaybackLayer();
 +    }
 +    //! NOTE The owner's own notes keep their colour whether or not the score plays
 +    for (const auto& channel : m_liveKeys) {
 +        if (channel[key]) {
-+            return 1;
++            return livePlaybackLayer();
 +        }
 +    }
 +    if (m_playbackKeys[key] || m_playbackStatus == muse::audio::PlaybackStatus::Running) {
 +        return m_playbackKeys[key];
-     }
++    }
 +    //! NOTE Outside playback a selected note lights in its own staff's colour, never in the theme's grey
 +    const auto selected = m_selectionLayers.find(key);
 +    return selected == m_selectionLayers.cend() ? 0 : selected->second;
@@ -38248,7 +39843,7 @@ index afcbf4be..b3a9fbd8 100644
      for (const mu::engraving::Note* note : receivedNotes) {
 +        // the owner's own notes are layer 1; a note of the score takes its staff's layer, as playback does
 +        const mu::engraving::staff_idx_t staff = note->staffIdx();
-+        const size_t layer = isFromMidi ? 1 : (staff == muse::nidx ? 0 : staff) + 2;
++        const size_t layer = isFromMidi ? livePlaybackLayer() : staffPlaybackLayer(staff == muse::nidx ? 0 : staff);
          newKeys.insert(static_cast<piano_key_t>(useWrittenPitch ? note->epitch() : note->ppitch()));
 +        newSelectionLayers.emplace(static_cast<piano_key_t>(useWrittenPitch ? note->epitch() : note->ppitch()), layer);
          for (const mu::engraving::Note* otherNote : note->chord()->notes()) {
@@ -38312,12 +39907,11 @@ index afcbf4be..b3a9fbd8 100644
      if (!m_isPlaybackTrackingEnabled || m_playbackStatus != muse::audio::PlaybackStatus::Running || m_isWaitingForCountIn) return;
      auto globalContext = context();
      auto playbackState = globalContext ? globalContext->playbackState() : nullptr;
-@@ -281,16 +344,24 @@ void PianoKeyboardController::updatePlaybackKeys(muse::audio::secs_t position, b
+@@ -281,16 +344,52 @@ void PianoKeyboardController::updatePlaybackKeys(muse::audio::secs_t position, b
      auto masterNotation = globalContext ? globalContext->currentMasterNotation() : nullptr;
      auto notationPlayback = masterNotation ? masterNotation->playback() : nullptr;
      auto controller = playbackController();
 -    std::unordered_set<piano_key_t> playbackKeys;
-+    PianoKeyLayers playbackKeys {};
      if (notationPlayback && controller) {
 -        if (!m_audibleInstrumentTrackIds) m_audibleInstrumentTrackIds = controller->audibleInstrumentTrackIds();
 -        const auto pitches = notationPlayback->activePlaybackPitches(position, *m_audibleInstrumentTrackIds);
@@ -38325,14 +39919,43 @@ index afcbf4be..b3a9fbd8 100644
 +        if (!m_playbackTrackLayers) {
 +            m_playbackTrackLayers = notationPlayback->playbackTrackLayers(controller->audibleInstrumentTrackIds());
 +        }
-+        for (size_t layer = 0; layer < m_playbackTrackLayers->size(); ++layer) {
-+            const auto& tracks = (*m_playbackTrackLayers)[layer];
-+            if (tracks.empty()) {
-+                continue;
-+            }
-+            const auto pitches = notationPlayback->activePlaybackPitches(position, tracks);
-+            applyPianoKeyLayer(playbackKeys, pitches, layer + 2);
++        updatePlaybackLayers(notationPlayback, *m_playbackTrackLayers, position);
++    } else if (replacePlaybackKeys({})) {
++        m_keyStatesChanged.notify();
++    }
++}
++
++void PianoKeyboardController::setExportPlaybackPosition(const INotationPlaybackPtr& playback,
++                                                       const engraving::InstrumentTrackIdSet& tracks,
++                                                       std::optional<muse::audio::secs_t> position)
++{
++    m_playbackStatus = muse::audio::PlaybackStatus::Running;
++    m_pressedKey.reset();
++    m_liveKeys = {};
++    m_keys.clear();
++    m_otherNotesInChord.clear();
++    m_selectionLayers.clear();
++    if (position) {
++        updatePlaybackLayers(playback, playback->playbackTrackLayers(tracks), *position);
++    } else if (replacePlaybackKeys({})) {
++        m_keyStatesChanged.notify();
++    }
++}
++
++void PianoKeyboardController::updatePlaybackLayers(const INotationPlaybackPtr& notationPlayback,
++                                                  const std::vector<engraving::InstrumentTrackIdSet>& layers,
++                                                  muse::audio::secs_t position)
++{
++    PianoKeyLayers playbackKeys {};
++    for (size_t layer = 0; layer < layers.size(); ++layer) {
++        const auto& tracks = layers[layer];
++        if (tracks.empty()) {
++            continue;
 +        }
++        const auto pitches = notationPlayback->activePlaybackPitches(position, tracks);
++        const size_t playbackLayer = layer + 1 == layers.size()
++                                     ? chordPlaybackLayer(layer) : staffPlaybackLayer(layer);
++        applyPianoKeyLayer(playbackKeys, pitches, playbackLayer);
      }
      if (replacePlaybackKeys(std::move(playbackKeys))) m_keyStatesChanged.notify();
  }
@@ -38343,7 +39966,7 @@ index afcbf4be..b3a9fbd8 100644
      if (m_playbackKeys == keys) return false;
      m_playbackKeys = std::move(keys);
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.h b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.h
-index f5528c31..35c44032 100644
+index f5528c31..7ff27d76 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.h
 +++ b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.h
 @@ -22,6 +22,7 @@
@@ -38354,24 +39977,34 @@ index f5528c31..35c44032 100644
  #include "async/asyncable.h"
  #include "audio/common/audiotypes.h"
  
-@@ -52,6 +53,7 @@ public:
+@@ -52,6 +53,15 @@ public:
      void setPressedKey(std::optional<piano_key_t> key);
      void setHoveredKey(std::optional<piano_key_t> key);
  
 +    size_t keyPlaybackLayer(piano_key_t key) const;
++    static constexpr size_t livePlaybackLayer() { return 1; }
++    static constexpr size_t staffPlaybackLayer(size_t staff) { return staff + livePlaybackLayer() + 1; }
++    static constexpr size_t chordPlaybackLayer(size_t staffCount) { return staffPlaybackLayer(staffCount); }
++    static constexpr size_t staffPlaybackLayerCount() { return PIANO_KEY_LAYER_COLORS.size(); }
++    bool replacePlaybackKeys(PianoKeyLayers keys);
++    void setExportPlaybackPosition(const INotationPlaybackPtr& playback,
++                                   const engraving::InstrumentTrackIdSet& tracks,
++                                   std::optional<muse::audio::secs_t> position);
      KeyState keyState(piano_key_t key) const;
      muse::async::Notification keyStatesChanged() const;
  
-@@ -68,7 +70,7 @@ private:
+@@ -68,7 +78,9 @@ private:
      void onPlaybackPositionChanged(muse::audio::secs_t position);
      void refreshPlaybackKeys();
      void updatePlaybackKeys(muse::audio::secs_t position, bool force = false);
 -    bool replacePlaybackKeys(std::unordered_set<piano_key_t> keys);
-+    bool replacePlaybackKeys(PianoKeyLayers keys);
++    void updatePlaybackLayers(const INotationPlaybackPtr& playback,
++                              const std::vector<engraving::InstrumentTrackIdSet>& layers,
++                              muse::audio::secs_t position);
  
      void sendNoteOn(piano_key_t key);
      void sendNoteOff(piano_key_t key);
-@@ -79,7 +81,9 @@ private:
+@@ -79,7 +91,9 @@ private:
      std::optional<piano_key_t> m_hoveredKey = std::nullopt;
      std::unordered_set<piano_key_t> m_keys;
      std::unordered_set<piano_key_t> m_otherNotesInChord;
@@ -38382,7 +40015,7 @@ index f5528c31..35c44032 100644
  
      bool m_isFromMidi = false;
      bool m_isInitialized = false;
-@@ -89,7 +93,7 @@ private:
+@@ -89,7 +103,7 @@ private:
      muse::audio::PlaybackStatus m_playbackStatus = muse::audio::PlaybackStatus::Stopped;
      std::optional<muse::audio::secs_t> m_lastPlaybackPosition;
      std::optional<muse::audio::secs_t> m_countInStartPosition;
@@ -38452,10 +40085,28 @@ index 3948c13a..a205852d 100644
  }
  
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp
-index c3bfa8de..bc22d122 100644
+index c3bfa8de..414211a7 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp
 +++ b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp
-@@ -115,6 +115,16 @@ void PianoKeyboardView::calculateKeyRects()
+@@ -22,8 +22,17 @@
+ #include "pianokeyboardview.h"
+ 
+ #include <QPainter>
++#include <QDir>
++#include <QImage>
++#include <QImageWriter>
++#include <QJsonArray>
++#include <QJsonDocument>
++#include <QJsonObject>
++#include <QSaveFile>
++#include <QtMath>
+ 
+ #include "pianokeyboardcontroller.h"
++#include "notationscene/inotationsceneconfiguration.h"
+ 
+ #include "log.h"
+ 
+@@ -115,6 +124,16 @@ void PianoKeyboardView::calculateKeyRects()
      constexpr qreal defaultSpacing = 2.0;
      constexpr qreal maxSpacing = 2.0;
  
@@ -38472,7 +40123,7 @@ index c3bfa8de..bc22d122 100644
      m_spacing = std::min(defaultSpacing * m_keyWidthScaling, maxSpacing);
  
      constexpr qreal defaultWhiteKeyWidth = 30.0;
-@@ -149,6 +159,12 @@ void PianoKeyboardView::calculateKeyRects()
+@@ -149,6 +168,12 @@ void PianoKeyboardView::calculateKeyRects()
      }
  
      m_keysAreaRect.setSize(QSizeF(hPos + m_spacing / 2, m_whiteKeyHeight));
@@ -38485,7 +40136,7 @@ index c3bfa8de..bc22d122 100644
      adjustKeysAreaPosition();
  }
  
-@@ -187,19 +203,16 @@ void PianoKeyboardView::updateKeyStateColors()
+@@ -187,19 +212,16 @@ void PianoKeyboardView::updateKeyStateColors()
      m_whiteKeyStateColors[KeyState::None] = Qt::white;
      m_whiteKeyStateColors[KeyState::OtherInSelectedChord] = mixedColors(Qt::white, accentColor, 0.25);
      m_whiteKeyStateColors[KeyState::Selected] = mixedColors(Qt::white, accentColor, isKeysFromMidiInput ? 0.8 : 0.5);
@@ -38505,7 +40156,110 @@ index c3bfa8de..bc22d122 100644
  }
  
  void PianoKeyboardView::paint(QPainter* painter)
-@@ -255,7 +268,12 @@ void PianoKeyboardView::paintWhiteKeys(QPainter* painter, const QRectF& viewport
+@@ -222,6 +244,102 @@ void PianoKeyboardView::paint(QPainter* painter)
+     paintBlackKeys(painter, viewport);
+ }
+ 
++void PianoKeyboardView::paintPlayback(QPainter* painter, const INotationPlaybackPtr& playback,
++                                      const engraving::InstrumentTrackIdSet& tracks,
++                                      std::optional<muse::audio::secs_t> position)
++{
++    if (!m_isInitialized || !playback) {
++        return;
++    }
++    m_controller->setExportPlaybackPosition(playback, tracks, position);
++    painter->save();
++    paint(painter);
++    painter->restore();
++}
++
++QString PianoKeyboardView::writeImages(const QString& folder, int imageWidth)
++{
++    if (m_isInitialized || imageWidth <= 0 || folder.isEmpty()) {
++        return QStringLiteral("keyboard export requires a fresh view, a folder and a positive width");
++    }
++    setNumberOfKeys(DEFAULT_PIANO_KEYBOARD_NUMBER_OF_KEYS);
++    setWidth(imageWidth);
++    init();
++    setHeight(qCeil(fittedHeight()));
++    const QSize imageSize(qRound(width()), qRound(height()));
++    QImage image(imageSize, QImage::Format_ARGB32_Premultiplied);
++    if (image.isNull()) {
++        return QStringLiteral("cannot allocate keyboard image %1 x %2").arg(imageSize.width()).arg(imageSize.height());
++    }
++    QDir directory(folder);
++    if (!directory.mkpath(QStringLiteral("."))) {
++        return QStringLiteral("cannot create keyboard image folder: %1").arg(directory.absolutePath());
++    }
++    const auto writeImage = [this, &image, &directory](const QString& name) -> QString {
++        image.fill(Qt::transparent);
++        QPainter painter(&image);
++        if (!painter.isActive()) {
++            return QStringLiteral("cannot start keyboard painter for %1").arg(name);
++        }
++        paint(&painter);
++        if (!painter.end()) {
++            return QStringLiteral("cannot finish keyboard painter for %1").arg(name);
++        }
++        QImageWriter writer(directory.filePath(name), "png");
++        if (!writer.write(image)) {
++            return QStringLiteral("cannot write %1: %2").arg(writer.fileName(), writer.errorString());
++        }
++        return {};
++    };
++    m_controller->replacePlaybackKeys({});
++    QString error = writeImage(QStringLiteral("unlit.png"));
++    if (!error.isEmpty()) {
++        return error;
++    }
++    QJsonArray staffs;
++    std::vector<size_t> layers { m_controller->livePlaybackLayer() };
++    const size_t staffCount = m_controller->staffPlaybackLayerCount();
++    for (size_t staff = 0; staff < staffCount; ++staff) {
++        const size_t layer = m_controller->staffPlaybackLayer(staff);
++        staffs.append(static_cast<qint64>(layer));
++        layers.push_back(layer);
++    }
++    const size_t chords = m_controller->chordPlaybackLayer(staffCount);
++    layers.push_back(chords);
++    const int low = m_lowestKey;
++    const int high = std::min<int>(low + numberOfKeys(), MAX_NUM_KEYS) - 1;
++    for (int pitch = low; pitch <= high; ++pitch) {
++        for (const size_t layer : layers) {
++            PianoKeyLayers keys {};
++            applyPianoKeyLayer(keys, std::array<piano_key_t, 1> { static_cast<piano_key_t>(pitch) }, layer);
++            m_controller->replacePlaybackKeys(std::move(keys));
++            error = writeImage(QStringLiteral("%1-%2.png").arg(pitch).arg(static_cast<qulonglong>(layer)));
++            if (!error.isEmpty()) {
++                return error;
++            }
++        }
++    }
++    m_controller->replacePlaybackKeys({});
++    const QJsonObject metadata {
++        { "live", static_cast<qint64>(m_controller->livePlaybackLayer()) },
++        { "staffs", staffs },
++        { "chords", static_cast<qint64>(chords) },
++        { "low", low },
++        { "high", high },
++        { "width", image.width() },
++        { "height", image.height() }
++    };
++    QSaveFile file(directory.filePath(QStringLiteral("layers.json")));
++    if (!file.open(QIODevice::WriteOnly)) {
++        return QStringLiteral("cannot open %1: %2").arg(file.fileName(), file.errorString());
++    }
++    const QByteArray json = QJsonDocument(metadata).toJson(QJsonDocument::Compact);
++    if (file.write(json) != json.size() || !file.commit()) {
++        return QStringLiteral("cannot write %1: %2").arg(file.fileName(), file.errorString());
++    }
++    return {};
++}
++
+ void PianoKeyboardView::paintBackground(QPainter* painter)
+ {
+     painter->fillRect(m_keysAreaRect, backgroundColor);
+@@ -255,7 +373,12 @@ void PianoKeyboardView::paintWhiteKeys(QPainter* painter, const QRectF& viewport
  
          painter->translate(rect.topLeft());
  
@@ -38518,7 +40272,7 @@ index c3bfa8de..bc22d122 100644
  
          painter->fillPath(path, fillColor);
  
-@@ -351,8 +369,13 @@ void PianoKeyboardView::paintBlackKeys(QPainter* painter, const QRectF& viewport
+@@ -351,8 +474,13 @@ void PianoKeyboardView::paintBlackKeys(QPainter* painter, const QRectF& viewport
              bottomPieceGradient.setFinalStop(0.0, bottom);
          }
  
@@ -38534,7 +40288,7 @@ index c3bfa8de..bc22d122 100644
  
          painter->translate(rect.topLeft());
          painter->fillRect(backgroundRect, backgroundColor);
-@@ -362,6 +385,11 @@ void PianoKeyboardView::paintBlackKeys(QPainter* painter, const QRectF& viewport
+@@ -362,6 +490,11 @@ void PianoKeyboardView::paintBlackKeys(QPainter* painter, const QRectF& viewport
      }
  }
  
@@ -38546,11 +40300,31 @@ index c3bfa8de..bc22d122 100644
  int PianoKeyboardView::numberOfKeys() const
  {
      return m_numberOfKeys;
+@@ -382,9 +515,9 @@ void PianoKeyboardView::setNumberOfKeys(int number)
+         m_lowestKey = 21;
+         m_numberOfKeys = 88;
+         break;
+-    case 61:
++    case DEFAULT_PIANO_KEYBOARD_NUMBER_OF_KEYS:
+         m_lowestKey = 36;
+-        m_numberOfKeys = 61;
++        m_numberOfKeys = DEFAULT_PIANO_KEYBOARD_NUMBER_OF_KEYS;
+         break;
+     case 49:
+         m_lowestKey = 36;
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h
-index f1bfd8f8..773c19a6 100644
+index f1bfd8f8..4e5b55e8 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h
 +++ b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h
-@@ -41,6 +41,7 @@ class PianoKeyboardView : public muse::uicomponents::QuickPaintedView, public mu
+@@ -28,6 +28,7 @@
+ 
+ #include "modularity/ioc.h"
+ #include "notation/inotationconfiguration.h"
++#include "notation/inotationplayback.h"
+ #include "ui/iuiconfiguration.h"
+ 
+ #include "pianokeyboardtypes.h"
+@@ -41,6 +42,7 @@ class PianoKeyboardView : public muse::uicomponents::QuickPaintedView, public mu
  
      Q_PROPERTY(int numberOfKeys READ numberOfKeys WRITE setNumberOfKeys NOTIFY numberOfKeysChanged)
      Q_PROPERTY(qreal keyWidthScaling READ keyWidthScaling WRITE setScaling NOTIFY keyWidthScalingChanged)
@@ -38558,15 +40332,19 @@ index f1bfd8f8..773c19a6 100644
  
      Q_PROPERTY(qreal scrollBarPosition READ scrollBarPosition WRITE setScrollBarPosition NOTIFY scrollBarChanged)
      Q_PROPERTY(qreal scrollBarSize READ scrollBarSize NOTIFY scrollBarChanged)
-@@ -56,6 +57,7 @@ public:
+@@ -55,7 +57,11 @@ public:
+     Q_INVOKABLE void init();
  
      void paint(QPainter* painter) override;
++    QString writeImages(const QString& folder, int imageWidth);
++    void paintPlayback(QPainter* painter, const INotationPlaybackPtr& playback,
++                       const engraving::InstrumentTrackIdSet& tracks, std::optional<muse::audio::secs_t> position);
  
 +    qreal fittedHeight() const;
      int numberOfKeys() const;
      void setNumberOfKeys(int number);
  
-@@ -70,6 +72,7 @@ public:
+@@ -70,6 +76,7 @@ public:
  signals:
      void numberOfKeysChanged();
      void keyWidthScalingChanged();
@@ -38574,7 +40352,7 @@ index f1bfd8f8..773c19a6 100644
  
      void scrollBarChanged();
  
-@@ -118,6 +121,7 @@ private:
+@@ -118,6 +125,7 @@ private:
      std::map<KeyState, QColor> m_blackKeyBottomPieceStateColors;
  
      qreal m_keyWidthScaling = 1.0;
@@ -38583,7 +40361,7 @@ index f1bfd8f8..773c19a6 100644
      qreal m_spacing = 0.0;
  
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/tests/pianokeyboardcontroller_tests.cpp b/src/notationscene/qml/MuseScore/NotationScene/tests/pianokeyboardcontroller_tests.cpp
-index 13b9bfe3..d9fec46c 100644
+index 13b9bfe3..01678c7c 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/tests/pianokeyboardcontroller_tests.cpp
 +++ b/src/notationscene/qml/MuseScore/NotationScene/tests/pianokeyboardcontroller_tests.cpp
 @@ -40,6 +40,7 @@
@@ -38651,7 +40429,7 @@ index 13b9bfe3..d9fec46c 100644
  };
  
  class GlobalContextFake : public context::IGlobalContext
-@@ -284,32 +285,33 @@ public:
+@@ -284,32 +285,34 @@ public:
      MOCK_METHOD(engraving::InstrumentTrackId, chordSymbolsTrackId, (const ID&), (const, override));
      MOCK_METHOD(bool, isChordSymbolsTrack, (const engraving::InstrumentTrackId&), (const, override));
      MOCK_METHOD(const mpe::PlaybackData&, trackPlaybackData, (const engraving::InstrumentTrackId&), (const, override));
@@ -38666,6 +40444,7 @@ index 13b9bfe3..d9fec46c 100644
 -    MOCK_METHOD(void, triggerCountIn, (midi::tick_t, secs_t &), (override));
 +    MOCK_METHOD(void, triggerMetronome, (muse::midi::tick_t), (override));
 +    MOCK_METHOD(void, triggerCountIn, (muse::midi::tick_t, secs_t &), (override));
++    MOCK_METHOD(secs_t, setExportCountIn, (bool), (override));
      MOCK_METHOD(void, triggerControllers, (const mpe::ControllerChangeEventList&, engraving::staff_idx_t, int), (override));
      MOCK_METHOD(engraving::InstrumentTrackIdSet, existingTrackIdSet, (), (const, override));
      MOCK_METHOD(async::Channel<engraving::InstrumentTrackId>, trackAdded, (), (const, override));
@@ -38698,7 +40477,7 @@ index 13b9bfe3..d9fec46c 100644
      MOCK_METHOD(double, tempoMultiplier, (), (const, override));
      MOCK_METHOD(void, setTempoMultiplier, (double), (override));
      MOCK_METHOD(void, addSoundFlags, (const std::vector<engraving::StaffText*>&), (override));
-@@ -324,7 +326,7 @@ public:
+@@ -324,7 +327,7 @@ public:
      MOCK_METHOD(Ret, setupNewScore, (engraving::MasterScore*, const ScoreCreateOptions&), (override));
      MOCK_METHOD(void, applyOptions, (engraving::MasterScore*, const ScoreCreateOptions&, bool), (override));
      MOCK_METHOD(engraving::MasterScore*, masterScore, (), (const, override));
@@ -38707,7 +40486,7 @@ index 13b9bfe3..d9fec46c 100644
      MOCK_METHOD(INotationPtr, notation, (), (override));
      MOCK_METHOD(int, mscVersion, (), (const, override));
      MOCK_METHOD(IExcerptNotationPtr, createEmptyExcerpt, (const QString&), (const, override));
-@@ -333,7 +335,7 @@ public:
+@@ -333,7 +336,7 @@ public:
      MOCK_METHOD(const ExcerptNotationList&, potentialExcerpts, (), (const, override));
      MOCK_METHOD(void, initExcerpts, (const ExcerptNotationList&), (override));
      MOCK_METHOD(void, setExcerpts, (const ExcerptNotationList&), (override));
@@ -38716,7 +40495,7 @@ index 13b9bfe3..d9fec46c 100644
      MOCK_METHOD(void, sortExcerpts, (ExcerptNotationList &), (override));
      MOCK_METHOD(void, setExcerptIsOpen, (const INotationPtr, bool), (override));
      MOCK_METHOD(INotationPartsPtr, parts, (), (const, override));
-@@ -341,14 +343,12 @@ public:
+@@ -341,14 +344,12 @@ public:
      MOCK_METHOD(async::Notification, hasPartsChanged, (), (const, override));
      MOCK_METHOD(INotationPlaybackPtr, playback, (), (const, override));
      MOCK_METHOD(void, initNotationSoloMuteState, (const INotationPtr), (override));
@@ -38731,7 +40510,7 @@ index 13b9bfe3..d9fec46c 100644
  
  class PianoKeyboardControllerTests : public ::testing::Test, public async::Asyncable
  {
-@@ -363,12 +363,18 @@ public:
+@@ -363,12 +364,18 @@ public:
          m_globalContext->setPlaybackState(m_playbackState);
  
          m_notationPlayback = std::make_shared<NiceMock<NotationPlaybackMock> >();
@@ -38750,7 +40529,7 @@ index 13b9bfe3..d9fec46c 100644
          m_midiInput = std::make_shared<NotationMidiInputFake>();
          m_notation = std::make_shared<NiceMock<NotationMock> >();
          ON_CALL(*m_notation, soloMuteState()).WillByDefault(Return(m_soloMuteState));
-@@ -405,6 +411,7 @@ public:
+@@ -405,6 +412,7 @@ public:
              m_controller->keyStatesChanged().disconnect(this);
          }
          m_controller.reset();
@@ -38758,7 +40537,7 @@ index 13b9bfe3..d9fec46c 100644
          modularity::removeIoC(m_iocContext);
      }
  
-@@ -443,13 +450,14 @@ TEST_F(PianoKeyboardControllerTests, RunningQueriesImmediatelyAndUsesAudibleTrac
+@@ -443,13 +451,14 @@ TEST_F(PianoKeyboardControllerTests, RunningQueriesImmediatelyAndUsesAudibleTrac
      EXPECT_CALL(*m_playbackController, audibleInstrumentTrackIds())
      .WillOnce(Return(m_audibleTracks));
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.25), m_audibleTracks))
@@ -38776,7 +40555,7 @@ index 13b9bfe3..d9fec46c 100644
      EXPECT_EQ(m_keyStatesChangedCount, 1);
  }
  
-@@ -466,11 +474,11 @@ TEST_F(PianoKeyboardControllerTests, CountInWaitsForFirstDifferentPosition)
+@@ -466,11 +475,11 @@ TEST_F(PianoKeyboardControllerTests, CountInWaitsForFirstDifferentPosition)
  
      testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(3.1), m_audibleTracks))
@@ -38790,7 +40569,7 @@ index 13b9bfe3..d9fec46c 100644
      EXPECT_EQ(m_keyStatesChangedCount, 1);
  }
  
-@@ -486,7 +494,7 @@ TEST_F(PianoKeyboardControllerTests, ResumeFromPauseWaitsForCountInAgain)
+@@ -486,7 +495,7 @@ TEST_F(PianoKeyboardControllerTests, ResumeFromPauseWaitsForCountInAgain)
  
      testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(3.1), m_audibleTracks))
@@ -38799,7 +40578,7 @@ index 13b9bfe3..d9fec46c 100644
      m_playbackState->setPosition(3.1);
      m_playbackState->setStatus(audio::PlaybackStatus::Paused);
  
-@@ -497,11 +505,12 @@ TEST_F(PianoKeyboardControllerTests, ResumeFromPauseWaitsForCountInAgain)
+@@ -497,11 +506,12 @@ TEST_F(PianoKeyboardControllerTests, ResumeFromPauseWaitsForCountInAgain)
  
      testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(3.2), m_audibleTracks))
@@ -38814,7 +40593,7 @@ index 13b9bfe3..d9fec46c 100644
      EXPECT_EQ(m_keyStatesChangedCount, 3);
  }
  
-@@ -518,13 +527,13 @@ TEST_F(PianoKeyboardControllerTests, PositionChangesAreIgnoredUnlessRunningAndSa
+@@ -518,13 +528,13 @@ TEST_F(PianoKeyboardControllerTests, PositionChangesAreIgnoredUnlessRunningAndSa
      testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(_, _))
      .Times(2)
@@ -38830,7 +40609,7 @@ index 13b9bfe3..d9fec46c 100644
      EXPECT_EQ(m_keyStatesChangedCount, 1);
  }
  
-@@ -536,9 +545,12 @@ TEST_F(PianoKeyboardControllerTests, PositionChangesReuseCachedAudibleTracks)
+@@ -536,9 +546,12 @@ TEST_F(PianoKeyboardControllerTests, PositionChangesReuseCachedAudibleTracks)
      EXPECT_CALL(*m_playbackController, audibleInstrumentTrackIds())
      .Times(1)
      .WillOnce(Return(m_audibleTracks));
@@ -38844,7 +40623,7 @@ index 13b9bfe3..d9fec46c 100644
  
      m_playbackState->setStatus(audio::PlaybackStatus::Running);
      m_playbackState->setPosition(2.0);
-@@ -550,41 +562,44 @@ TEST_F(PianoKeyboardControllerTests, PlaybackTrackChangesInvalidateAudibleTracks
+@@ -550,41 +563,44 @@ TEST_F(PianoKeyboardControllerTests, PlaybackTrackChangesInvalidateAudibleTracks
      enableTracking();
      m_playbackState->setPosition(1.0);
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), m_audibleTracks))
@@ -38896,7 +40675,7 @@ index 13b9bfe3..d9fec46c 100644
  }
  
  TEST_F(PianoKeyboardControllerTests, PauseStopAndResumePreservePressedKey)
-@@ -593,22 +608,98 @@ TEST_F(PianoKeyboardControllerTests, PauseStopAndResumePreservePressedKey)
+@@ -593,22 +609,98 @@ TEST_F(PianoKeyboardControllerTests, PauseStopAndResumePreservePressedKey)
      enableTracking();
      m_playbackState->setPosition(1.0);
      ON_CALL(*m_notationPlayback, activePlaybackPitches(_, _))
@@ -39001,7 +40780,7 @@ index 13b9bfe3..d9fec46c 100644
  }
  
  TEST_F(PianoKeyboardControllerTests, PlaybackPreservesSelectionAndMidiStates)
-@@ -639,24 +730,27 @@ TEST_F(PianoKeyboardControllerTests, PlaybackPreservesSelectionAndMidiStates)
+@@ -639,24 +731,27 @@ TEST_F(PianoKeyboardControllerTests, PlaybackPreservesSelectionAndMidiStates)
      enableTracking();
      m_playbackState->setPosition(1.0);
      ON_CALL(*m_notationPlayback, activePlaybackPitches(_, _))
@@ -39036,7 +40815,7 @@ index 13b9bfe3..d9fec46c 100644
  }
  
  TEST_F(PianoKeyboardControllerTests, SeekReplacesPlaybackKeys)
-@@ -664,15 +758,16 @@ TEST_F(PianoKeyboardControllerTests, SeekReplacesPlaybackKeys)
+@@ -664,15 +759,16 @@ TEST_F(PianoKeyboardControllerTests, SeekReplacesPlaybackKeys)
      enableTracking();
      m_playbackState->setPosition(1.0);
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
@@ -39056,7 +40835,7 @@ index 13b9bfe3..d9fec46c 100644
      EXPECT_EQ(m_keyStatesChangedCount, 2);
  }
  
-@@ -681,19 +776,20 @@ TEST_F(PianoKeyboardControllerTests, AudibleTracksChangeRefreshesAtSamePosition)
+@@ -681,19 +777,20 @@ TEST_F(PianoKeyboardControllerTests, AudibleTracksChangeRefreshesAtSamePosition)
      enableTracking();
      m_playbackState->setPosition(1.0);
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), m_audibleTracks))
@@ -39080,7 +40859,7 @@ index 13b9bfe3..d9fec46c 100644
      EXPECT_EQ(m_keyStatesChangedCount, 2);
  }
  
-@@ -702,19 +798,20 @@ TEST_F(PianoKeyboardControllerTests, ChordSymbolsConfigurationChangeRefreshesAtS
+@@ -702,19 +799,20 @@ TEST_F(PianoKeyboardControllerTests, ChordSymbolsConfigurationChangeRefreshesAtS
      enableTracking();
      m_playbackState->setPosition(1.0);
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
@@ -39104,7 +40883,7 @@ index 13b9bfe3..d9fec46c 100644
      EXPECT_EQ(m_keyStatesChangedCount, 2);
  }
  
-@@ -723,19 +820,20 @@ TEST_F(PianoKeyboardControllerTests, SelectionChangeRefreshesRangePlaybackAtSame
+@@ -723,19 +821,20 @@ TEST_F(PianoKeyboardControllerTests, SelectionChangeRefreshesRangePlaybackAtSame
      enableTracking();
      m_playbackState->setPosition(1.0);
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
@@ -39128,7 +40907,7 @@ index 13b9bfe3..d9fec46c 100644
      EXPECT_EQ(m_keyStatesChangedCount, 2);
  }
  
-@@ -755,21 +853,22 @@ TEST_F(PianoKeyboardControllerTests, DisabledTrackingDoesNotQueryOrNotifyAndReop
+@@ -755,21 +854,22 @@ TEST_F(PianoKeyboardControllerTests, DisabledTrackingDoesNotQueryOrNotifyAndReop
  
      testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(2.1), m_audibleTracks))
@@ -39155,7 +40934,7 @@ index 13b9bfe3..d9fec46c 100644
      EXPECT_EQ(m_keyStatesChangedCount, 2);
  }
  
-@@ -778,7 +877,7 @@ TEST_F(PianoKeyboardControllerTests, CurrentNotationSwitchRefreshesAndDisconnect
+@@ -778,7 +878,7 @@ TEST_F(PianoKeyboardControllerTests, CurrentNotationSwitchRefreshesAndDisconnect
      enableTracking();
      m_playbackState->setPosition(1.0);
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
@@ -39164,7 +40943,7 @@ index 13b9bfe3..d9fec46c 100644
      m_playbackState->setStatus(audio::PlaybackStatus::Running);
  
      auto replacementSoloMuteState = std::make_shared<NotationSoloMuteStateFake>();
-@@ -790,22 +889,24 @@ TEST_F(PianoKeyboardControllerTests, CurrentNotationSwitchRefreshesAndDisconnect
+@@ -790,22 +890,24 @@ TEST_F(PianoKeyboardControllerTests, CurrentNotationSwitchRefreshesAndDisconnect
      ON_CALL(*replacementNotation, midiInput()).WillByDefault(Return(replacementMidiInput));
  
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), m_audibleTracks))
@@ -39193,7 +40972,7 @@ index 13b9bfe3..d9fec46c 100644
  }
  
  TEST_F(PianoKeyboardControllerTests, MasterNotationSwitchAndMissingMasterRefreshPlayback)
-@@ -813,21 +914,25 @@ TEST_F(PianoKeyboardControllerTests, MasterNotationSwitchAndMissingMasterRefresh
+@@ -813,21 +915,25 @@ TEST_F(PianoKeyboardControllerTests, MasterNotationSwitchAndMissingMasterRefresh
      enableTracking();
      m_playbackState->setPosition(1.0);
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
@@ -39222,7 +41001,7 @@ index 13b9bfe3..d9fec46c 100644
  }
  
  TEST_F(PianoKeyboardControllerTests, DestructionDisconnectsPlaybackSubscriptions)
-@@ -839,3 +944,87 @@ TEST_F(PianoKeyboardControllerTests, DestructionDisconnectsPlaybackSubscriptions
+@@ -839,3 +945,87 @@ TEST_F(PianoKeyboardControllerTests, DestructionDisconnectsPlaybackSubscriptions
      m_playbackState->setPosition(10.0);
      SUCCEED();
  }
@@ -58642,7 +60421,7 @@ index 0e11e114..00000000
 -};
 -}
 diff --git a/src/project/qml/MuseScore/Project/internal/Export/Mp4SettingsPage.qml b/src/project/qml/MuseScore/Project/internal/Export/Mp4SettingsPage.qml
-index 101e5605..0a1f0155 100644
+index 101e5605..827677a2 100644
 --- a/src/project/qml/MuseScore/Project/internal/Export/Mp4SettingsPage.qml
 +++ b/src/project/qml/MuseScore/Project/internal/Export/Mp4SettingsPage.qml
 @@ -53,23 +53,6 @@ ExportSettingsPage {
@@ -58678,6 +60457,75 @@ index 101e5605..0a1f0155 100644
  
                  onPathEdited: function(newPath) {
                      if (root.model) {
+@@ -117,6 +100,7 @@ ExportSettingsPage {
+ 
+                 StyledDropdown {
+                     id: videoResolutionDropdown
++                    enabled: root.model && !root.model.isPracticeVideo
+                     Layout.preferredWidth: 126
+ 
+                     navigation.name: "VideoResolutionDropdown"
+diff --git a/src/project/qml/MuseScore/Project/internal/Export/exportdialogmodel.cpp b/src/project/qml/MuseScore/Project/internal/Export/exportdialogmodel.cpp
+index 7eef23f8..a3fe3ce0 100644
+--- a/src/project/qml/MuseScore/Project/internal/Export/exportdialogmodel.cpp
++++ b/src/project/qml/MuseScore/Project/internal/Export/exportdialogmodel.cpp
+@@ -627,6 +627,7 @@ QVariantList ExportDialogModel::availableViewModes() const
+     std::map<ViewMode, QString> viewModes {
+         { ViewMode::PageFull, muse::qtrc("project/export", "Use page layout") },
+         { ViewMode::Flexible, muse::qtrc("project/export", "Reflow to fit video resolution") },
++        { ViewMode::Practice, muse::qtrc("project/export", "Practice: keyboard and two systems (4K, 30 fps, HEVC)") },
+     };
+ 
+     QVariantList result;
+@@ -649,6 +650,8 @@ void ExportDialogModel::setViewMode(ViewMode v)
+ 
+     videoExportConfiguration()->setViewMode(v);
+     emit viewModeChanged(v);
++    emit isPracticeVideoChanged();
++    emit videoResolutionChanged(videoResolution());
+ }
+ 
+ ExportDialogModel::ViewMode ExportDialogModel::viewMode() const
+@@ -665,6 +668,11 @@ bool ExportDialogModel::isFFmpegAvailable() const
+ #endif
+ }
+ 
++bool ExportDialogModel::isPracticeVideo() const
++{
++    return viewMode() == ViewMode::Practice;
++}
++
+ QString ExportDialogModel::ffmpegDir() const
+ {
+ #ifdef MUE_BUILD_IMPEXP_VIDEOEXPORT_MODULE
+diff --git a/src/project/qml/MuseScore/Project/internal/Export/exportdialogmodel.h b/src/project/qml/MuseScore/Project/internal/Export/exportdialogmodel.h
+index 69f8ba66..9de77cae 100644
+--- a/src/project/qml/MuseScore/Project/internal/Export/exportdialogmodel.h
++++ b/src/project/qml/MuseScore/Project/internal/Export/exportdialogmodel.h
+@@ -83,6 +83,7 @@ class ExportDialogModel : public QAbstractListModel, public QQmlParserStatus, pu
+     using ViewMode = mu::iex::videoexport::ViewMode;
+     Q_ENUM(ViewMode);
+     Q_PROPERTY(ViewMode viewMode READ viewMode WRITE setViewMode NOTIFY viewModeChanged FINAL)
++    Q_PROPERTY(bool isPracticeVideo READ isPracticeVideo NOTIFY isPracticeVideoChanged FINAL)
+ 
+     Q_PROPERTY(int sampleRate READ sampleRate WRITE setSampleRate NOTIFY sampleRateChanged)
+     Q_PROPERTY(int bitRate READ bitRate WRITE setBitRate NOTIFY bitRateChanged)
+@@ -182,6 +183,7 @@ public:
+ 
+     Q_INVOKABLE QVariantList availableViewModes() const;
+     ViewMode viewMode() const;
++    bool isPracticeVideo() const;
+     void setViewMode(ViewMode v);
+ 
+     Q_INVOKABLE QList<int> availableSampleRates() const;
+@@ -260,6 +262,7 @@ signals:
+ 
+     void videoResolutionChanged(const QString& resolution);
+     void viewModeChanged(ViewMode v);
++    void isPracticeVideoChanged();
+ 
+     void availableSampleRatesChanged();
+     void sampleRateChanged(int sampleRate);
 diff --git a/src/project/qml/MuseScore/Project/internal/Migration/MigrationContentFor362.qml b/src/project/qml/MuseScore/Project/internal/Migration/MigrationContentFor362.qml
 index 97193690..afa135d8 100644
 --- a/src/project/qml/MuseScore/Project/internal/Migration/MigrationContentFor362.qml
