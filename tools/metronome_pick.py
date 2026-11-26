@@ -95,6 +95,11 @@ def launch_log(binary: pathlib.Path, score: pathlib.Path) -> tuple[str, bool]:
             logs = sorted((home / "mslite" / "logs").glob("*.log"))
             time.sleep(1)
         time.sleep(SETTLE_SECONDS)
+        osascript = shutil.which("osascript") or "osascript"
+        front = (
+            f'tell application "System Events" to set frontmost of (first process whose unix id is {process.pid}) to true'
+        )
+        subprocess.run([osascript, "-e", front], stdin=subprocess.DEVNULL, capture_output=True, check=False)
         quit_app = shutil.which("sh") or "sh"
         quit_status = subprocess.run(
             [quit_app, str(HERE / "quit-app.sh"), str(process.pid)],
@@ -151,6 +156,9 @@ def main() -> int:
         return 1
     if control:
         sys.stderr.write("a score without a pick still asked for one: the probe cannot tell them apart\n")
+        return 1
+    if not (picked_clean and plain_clean):
+        sys.stderr.write("the app held its quit with a dialog: opening the score marked it changed\n")
         return 1
     sys.stdout.write("ok (the score's metronome pick reached the audio engine; a score without one named none)\n")
     return 0

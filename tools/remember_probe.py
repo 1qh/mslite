@@ -83,9 +83,9 @@ def main() -> int:
         set_slots({
             "position/1": {"resourceMeta": {"id": pick, "type": "fluid_soundfont", "vendor": "Fluid", "attributes": {}}},
         })
-        remembered_log, _ = launch_log(binary, plain)
+        remembered_log, remembered_clean = launch_log(binary, plain)
         set_slots(None)
-        control_log, _ = launch_log(binary, plain)
+        control_log, control_clean = launch_log(binary, plain)
     finally:
         set_slots(None)
         shutil.rmtree(work, ignore_errors=True)
@@ -96,6 +96,9 @@ def main() -> int:
         return 1
     if named:
         sys.stderr.write("a launch with no remembered pick still asked for one: the probe cannot tell them apart\n")
+        return 1
+    if not (remembered_clean and control_clean):
+        sys.stderr.write("the app held its quit with a dialog: opening the score marked it changed\n")
         return 1
     sys.stdout.write(
         "ok (the remembered staff-1 pick reached the audio engine; with none remembered, none was asked for)\n",
