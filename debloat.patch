@@ -181,6 +181,39 @@ index fa59e1e2..00000000
 -    "general": "Musescore/{app_version} ({os_name} {os_version} {cpu_arch})",
 -    "cloud": "MS_EDITOR/{app_version}.{app_build} ({kernel_type} {kernel_version} {os_name} {os_version} {cpu_arch})"
 -}
+diff --git a/src/app/main.cpp b/src/app/main.cpp
+index 6784aa2e..00c534d7 100644
+--- a/src/app/main.cpp
++++ b/src/app/main.cpp
+@@ -25,6 +25,8 @@
+ #include <QApplication>
+ 
+ #ifdef Q_OS_MACOS
++#include <CoreFoundation/CoreFoundation.h>
++
+ #include "internal/platform/macos/macosbackground.h"
+ #endif
+ #include <QStyleHints>
+@@ -126,6 +128,19 @@ int main(int argc, char** argv)
+ #endif
+     QCoreApplication::setOrganizationName("MuseScore");
+     QCoreApplication::setOrganizationDomain("musescore.org");
++#ifdef Q_OS_MACOS
++    //! NOTE MuseScoreLite keeps its settings under its own bundle identifier, so the official MuseScore, a pipeline copy
++    //! and a test copy never read or write each other's settings: the domain is organisation domain plus app name
++    if (CFBundleRef bundle = CFBundleGetMainBundle()) {
++        if (CFStringRef identifier = CFBundleGetIdentifier(bundle)) {
++            const QString bundleId = QString::fromCFString(identifier);
++            const QString prefix = QStringLiteral("org.musescore.");
++            if (bundleId.startsWith(prefix) && bundleId.size() > prefix.size()) {
++                QCoreApplication::setApplicationName(bundleId.mid(prefix.size()));
++            }
++        }
++    }
++#endif
+     QCoreApplication::setApplicationVersion(MUSE_APP_VERSION);
+ 
+ #if !defined(Q_OS_WIN) && !defined(Q_OS_DARWIN) && !defined(Q_OS_WASM)
 diff --git a/src/appshell/CMakeLists.txt b/src/appshell/CMakeLists.txt
 index 1fadd6c3..9b386419 100644
 --- a/src/appshell/CMakeLists.txt
