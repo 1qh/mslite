@@ -76,6 +76,8 @@ fi
 if [ "${MSCORE_PACKAGE_ONLY:-}" != 1 ]; then
   # QML resolves imports only at launch, so a folder left out of the build is refused here, before the compile
   python3 "${HERE}/qml-imports.py" . > /dev/null
+  # and an assignment to a positioner's own implicit size, which QML also refuses only at launch
+  python3 "${HERE}/qml-readonly.py" . > /dev/null
   # packaging rewrites the bundle in place (it renames qml, prunes Qt, signs), so every install starts from none
   rm -rf applebuild/mscore.app
   MUSESCORE_CMAKE_ARGS="${LEAN}" CMAKE_OSX_ARCHITECTURES=arm64 MUSE_APP_BUILD_MODE=release MUSESCORE_INSTALL_DIR=../applebuild \
