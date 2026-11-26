@@ -149,15 +149,20 @@ done
 codesign --force --sign - "${BINARY}" 2> /dev/null
 
 : "${MSCORE_CHECK_SCORE:?set MSCORE_CHECK_SCORE to a score the built app opens for the window check}"
-# every gate runs a copy under the test bundle identifier, whose settings are its own, never the owner's
-gates() {
-  sh "${HERE}/pipeline-copy.sh" "$1" applebuild/test/mscore.app org.musescore.MuseScoreLite.test > /dev/null
-  TEST_BINARY="${PWD}/applebuild/test/mscore.app/Contents/MacOS/mscore"
-  sh "${HERE}/window-check.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}"
-  sh "${HERE}/net-check.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}"
-  sh "${HERE}/export-check.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}"
-  sh "${HERE}/tools/fresh-launch.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}"
-  rm -rf applebuild/test
+# every check runs a copy under the test bundle identifier, whose settings are its own, never the owner's; with
+# MSCORE_CHECK_HOST set, the checks run on that Mac over ssh, so they never take this Mac's screen, against
+# MSCORE_CHECK_REMOTE_SCORE, its own copy of the check score, from its own clone of this repository at ~/muse/mslite
+gates() { checks "$1" gates; }
+features() { checks "$1" features; }
+checks() {
+  if [ -z "${MSCORE_CHECK_HOST:-}" ]; then
+    sh "${HERE}/tools/app-checks.sh" "$1" "${MSCORE_CHECK_SCORE}" "$2"
+    return
+  fi
+  : "${MSCORE_CHECK_REMOTE_SCORE:?set MSCORE_CHECK_REMOTE_SCORE to the path of the check score on ${MSCORE_CHECK_HOST}}"
+  rsync -a --delete "$1/" "${MSCORE_CHECK_HOST}:mscore-check/mscore.app/"
+  commit=$(git -C "${HERE}" rev-parse HEAD)
+  printf '%s\n%s\n%s\n' "${commit}" "${MSCORE_CHECK_REMOTE_SCORE}" "$2" | ssh "${MSCORE_CHECK_HOST}" sh muse/mslite/tools/remote-checks.sh
 }
 gates applebuild/mscore.app
 
@@ -175,19 +180,6 @@ xcrun stapler validate "applebuild/mscore.app"
 gates applebuild/mscore.app
 # every feature the owner uses, driven on the packaged app before anything is published, since packaging removes Qt
 # parts and the 4 gates above judge none of the features
-features() {
-  sh "${HERE}/pipeline-copy.sh" "$1" applebuild/test/mscore.app org.musescore.MuseScoreLite.test > /dev/null
-  TEST_BINARY="${PWD}/applebuild/test/mscore.app/Contents/MacOS/mscore"
-  shots=$(mktemp -d)
-  DRIVE_PANELS="Palettes,Layout,Properties,Selection filter,History,Navigator,Timeline,Mixer,Percussion" \
-    sh "${HERE}/tools/drive-play.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}" "${shots}/panels" 2
-  sh "${HERE}/tools/navigator-click.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}" "${shots}/click"
-  sh "${HERE}/tools/menu-title.sh" "${TEST_BINARY}" 3 "${MSCORE_CHECK_SCORE}"
-  (cd "${HERE}" && python3 -m tools.remember_probe "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}" && python3 -m tools.metronome_pick "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}")
-  sh "${HERE}/tools/isolation-check.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}"
-  sh "${HERE}/tools/keyboard-check.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}" "${shots}/keys"
-  rm -rf applebuild/test "${shots}"
-}
 features applebuild/mscore.app
 [ "${MSCORE_SKIP_PUBLISH:-}" = 1 ] && {
   echo "packaged ${SRC}/${DMG}"
