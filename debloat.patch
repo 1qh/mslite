@@ -733,10 +733,10 @@ index 1e2fb2df..43ddd632 100644
  };
  }
 diff --git a/src/appshell/internal/platform/macos/macosappmenumodelhook.mm b/src/appshell/internal/platform/macos/macosappmenumodelhook.mm
-index 1c39edb7..e65e467a 100644
+index 1c39edb7..488a73f8 100644
 --- a/src/appshell/internal/platform/macos/macosappmenumodelhook.mm
 +++ b/src/appshell/internal/platform/macos/macosappmenumodelhook.mm
-@@ -23,11 +23,192 @@
+@@ -23,11 +23,187 @@
  #include "macosappmenumodelhook.h"
  
  #include <Cocoa/Cocoa.h>
@@ -916,11 +916,6 @@ index 1c39edb7..e65e467a 100644
 +    }];
 +    m_nativeMenuObserver->observers.push_back(activeObserver);
 +
-+    QObject::connect(&m_nativeMenuObserver->timer, &QTimer::timeout, &m_nativeMenuObserver->timer, [this]() {
-+        updateNativeMenu();
-+    });
-+    m_nativeMenuObserver->timer.setInterval(100);
-+    m_nativeMenuObserver->timer.start();
 +
 +    globalContext()->currentProjectChanged().onNotify(this, [this]() {
 +        onCurrentProjectChanged();
