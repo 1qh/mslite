@@ -4793,7 +4793,7 @@ index 70be7729..d4f24462 100644
  import MuseScore.Project
  import MuseScore.MuseSounds
 diff --git a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
-index dd4b7cf8..7d53fef1 100644
+index dd4b7cf8..e1ae4907 100644
 --- a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
 +++ b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
 @@ -117,11 +117,16 @@ DockPage {
@@ -5000,6 +5000,22 @@ index dd4b7cf8..7d53fef1 100644
  
              minimumWidth: root.panelMinDimension
              maximumWidth: root.panelMaxDimension
+@@ -433,13 +489,13 @@ DockPage {
+                 }
+ 
+                 onResizeRequested: function(newWidth, newHeight) {
+-                    mixerPanel.resize(newWidth, newHeight)
++                    mixerPanel.resize(mixerPanel.floating ? newWidth : mixerPanel.width, newHeight)
+                 }
+ 
+                 Connections {
+                     target: mixerPanel
+                     function onPanelShown() {
+-                        mixerPanelComponent.resizePanelToContentHeight()
++                        Qt.callLater(mixerPanelComponent.resizePanelToContent)
+                     }
+                 }
+             }
 @@ -458,36 +514,55 @@ DockPage {
              minimumWidth: root.panelMinDimension
              maximumWidth: root.panelMaxDimension
@@ -35199,18 +35215,21 @@ index 7bd4804a..eeedcf18 100644
      bool shouldWarnBeforeSavingDiagnosticFiles() const override;
      void setShouldWarnBeforeSavingDiagnosticFiles(bool val) override;
 diff --git a/src/framework/dockwindow/internal/dockbase.cpp b/src/framework/dockwindow/internal/dockbase.cpp
-index 87246785..c3e064fa 100644
+index 87246785..744acbde 100644
 --- a/src/framework/dockwindow/internal/dockbase.cpp
 +++ b/src/framework/dockwindow/internal/dockbase.cpp
-@@ -25,6 +25,7 @@
+@@ -23,8 +23,10 @@
+ #include "dockbase.h"
+ 
  #include <QRect>
++#include <QScreen>
  #include <QTimer>
  #include <QAction>
 +#include <QtMath>
  
  #include "log.h"
  
-@@ -51,6 +52,38 @@ static bool sizeInRange(const QSize& size, const QSize& min, const QSize& max)
+@@ -51,6 +53,38 @@ static bool sizeInRange(const QSize& size, const QSize& min, const QSize& max)
      return widthInRange && heightInRange;
  }
  
@@ -35249,7 +35268,7 @@ index 87246785..c3e064fa 100644
  class DockWidgetImpl : public KDDockWidgets::DockWidgetQuick
  {
  public:
-@@ -221,6 +254,11 @@ bool DockBase::floatable() const
+@@ -221,6 +255,11 @@ bool DockBase::floatable() const
      return m_properties.floatable;
  }
  
@@ -35261,7 +35280,7 @@ index 87246785..c3e064fa 100644
  bool DockBase::floating() const
  {
      return m_floating;
-@@ -341,6 +379,15 @@ void DockBase::setFloatable(bool floatable)
+@@ -341,6 +380,15 @@ void DockBase::setFloatable(bool floatable)
      emit floatableChanged();
  }
  
@@ -35277,7 +35296,7 @@ index 87246785..c3e064fa 100644
  void DockBase::setClosable(bool closable)
  {
      if (closable == m_properties.closable) {
-@@ -435,6 +482,7 @@ void DockBase::init()
+@@ -435,6 +483,7 @@ void DockBase::init()
  
      applySizeConstraints();
      updateFloatingStatus();
@@ -35285,7 +35304,7 @@ index 87246785..c3e064fa 100644
  }
  
  void DockBase::deinit()
-@@ -463,6 +511,27 @@ void DockBase::open()
+@@ -463,6 +512,27 @@ void DockBase::open()
      m_dockWidget->show();
  
      applySizeConstraints();
@@ -35313,7 +35332,29 @@ index 87246785..c3e064fa 100644
  }
  
  void DockBase::close()
-@@ -670,6 +739,7 @@ void DockBase::componentComplete()
+@@ -575,6 +645,21 @@ void DockBase::resize(int width, int height)
+     width = qBound(m_minimumWidth, width, m_maximumWidth);
+     height = qBound(m_minimumHeight, height, m_maximumHeight);
+ 
++    if (const auto* floatingWindow = m_dockWidget->floatingWindow()) {
++        if (floatingWindow->hasSingleDockWidget()) {
++            if (const QWindow* window = floatingWindow->windowHandle()) {
++                if (const QScreen* screen = window->screen()) {
++                    const QMargins margins = window->frameMargins();
++                    const QSize available = screen->availableGeometry().size();
++                    const int extraWidth = qMax(0, qCeil(floatingWindow->width() - this->width()));
++                    const int extraHeight = qMax(0, qCeil(floatingWindow->height() - this->height()));
++                    width = qMin(width, qMax(1, available.width() - extraWidth - margins.left() - margins.right()));
++                    height = qMin(height, qMax(1, available.height() - extraHeight - margins.top() - margins.bottom()));
++                }
++            }
++        }
++    }
++
+     QSize minSizeBackup = QSize(m_minimumWidth, m_minimumHeight);
+     QSize maxSizeBackup = QSize(m_maximumWidth, m_maximumHeight);
+ 
+@@ -670,6 +755,7 @@ void DockBase::componentComplete()
      connect(this, &DockBase::maximumSizeChanged, this, &DockBase::applySizeConstraints);
  
      m_defaultVisibility = isVisible();
@@ -37207,10 +37248,34 @@ index f1bfd8f8..773c19a6 100644
      qreal m_spacing = 0.0;
  
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/tests/pianokeyboardcontroller_tests.cpp b/src/notationscene/qml/MuseScore/NotationScene/tests/pianokeyboardcontroller_tests.cpp
-index 13b9bfe3..17726dde 100644
+index 13b9bfe3..170355b5 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/tests/pianokeyboardcontroller_tests.cpp
 +++ b/src/notationscene/qml/MuseScore/NotationScene/tests/pianokeyboardcontroller_tests.cpp
-@@ -99,8 +99,14 @@ private:
+@@ -40,6 +40,7 @@
+ 
+ #include "notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.h"
+ 
++namespace {
+ using ::testing::_;
+ using ::testing::NiceMock;
+ using ::testing::Return;
+@@ -48,15 +49,9 @@ using namespace muse;
+ using namespace mu;
+ using namespace mu::notation;
+ 
+-namespace {
+ class PlaybackStateFake : public context::IPlaybackState
+ {
+ public:
+-    bool isPlaying() const override
+-    {
+-        return m_status == audio::PlaybackStatus::Running;
+-    }
+-
+     audio::PlaybackStatus playbackStatus() const override
+     {
+         return m_status;
+@@ -99,8 +94,14 @@ private:
  class NotationMidiInputFake : public INotationMidiInput
  {
  public:
@@ -37226,7 +37291,7 @@ index 13b9bfe3..17726dde 100644
      }
  
      async::Channel<std::vector<const engraving::Note*> > notesReceived() const override
-@@ -119,6 +125,7 @@ public:
+@@ -119,6 +120,7 @@ public:
  
  private:
      mutable async::Channel<std::vector<const engraving::Note*> > m_notesReceived;
@@ -37234,7 +37299,24 @@ index 13b9bfe3..17726dde 100644
  };
  
  class NotationSoloMuteStateFake : public INotationSoloMuteState
-@@ -284,32 +291,34 @@ public:
+@@ -167,7 +169,6 @@ private:
+ class NotationMock : public INotation
+ {
+ public:
+-    MOCK_METHOD(const modularity::ContextPtr&, iocContext, (), (const, override));
+     MOCK_METHOD(project::INotationProject*, project, (), (const, override));
+     MOCK_METHOD(IMasterNotationPtr, masterNotation, (), (const, override));
+     MOCK_METHOD(QString, name, (), (const, override));
+@@ -194,7 +195,7 @@ public:
+     MOCK_METHOD(INotationElementsPtr, elements, (), (const, override));
+     MOCK_METHOD(INotationAccessibilityPtr, accessibility, (), (const, override));
+     MOCK_METHOD(INotationPartsPtr, parts, (), (const, override));
+-    MOCK_METHOD(async::Channel<RectF>, notationChanged, (), (const, override));
++    MOCK_METHOD(async::Notification, notationChanged, (), (const, override));
+ };
+ 
+ class GlobalContextFake : public context::IGlobalContext
+@@ -284,32 +285,33 @@ public:
      MOCK_METHOD(engraving::InstrumentTrackId, chordSymbolsTrackId, (const ID&), (const, override));
      MOCK_METHOD(bool, isChordSymbolsTrack, (const engraving::InstrumentTrackId&), (const, override));
      MOCK_METHOD(const mpe::PlaybackData&, trackPlaybackData, (const engraving::InstrumentTrackId&), (const, override));
@@ -37269,7 +37351,7 @@ index 13b9bfe3..17726dde 100644
 +    MOCK_METHOD(void, addLoopBoundary, (LoopBoundaryType, muse::midi::tick_t), (override));
      MOCK_METHOD(void, setLoopBoundariesEnabled, (bool), (override));
      MOCK_METHOD(bool, isLoopEnabled, (), (const, override));
-     MOCK_METHOD(async::Channel<bool>, loopEnabledChanged, (), (const, override));
+-    MOCK_METHOD(async::Channel<bool>, loopEnabledChanged, (), (const, override));
      MOCK_METHOD(const LoopBoundaries&, loopBoundaries, (), (const, override));
      MOCK_METHOD(async::Notification, loopBoundariesChanged, (), (const, override));
 -    MOCK_METHOD(const Tempo&, multipliedTempo, (midi::tick_t), (const, override));
@@ -37281,7 +37363,40 @@ index 13b9bfe3..17726dde 100644
      MOCK_METHOD(double, tempoMultiplier, (), (const, override));
      MOCK_METHOD(void, setTempoMultiplier, (double), (override));
      MOCK_METHOD(void, addSoundFlags, (const std::vector<engraving::StaffText*>&), (override));
-@@ -363,6 +372,9 @@ public:
+@@ -324,7 +326,7 @@ public:
+     MOCK_METHOD(Ret, setupNewScore, (engraving::MasterScore*, const ScoreCreateOptions&), (override));
+     MOCK_METHOD(void, applyOptions, (engraving::MasterScore*, const ScoreCreateOptions&, bool), (override));
+     MOCK_METHOD(engraving::MasterScore*, masterScore, (), (const, override));
+-    MOCK_METHOD(void, setMasterScore, (engraving::MasterScore*, bool), (override));
++    MOCK_METHOD(void, setMasterScore, (engraving::MasterScore*), (override));
+     MOCK_METHOD(INotationPtr, notation, (), (override));
+     MOCK_METHOD(int, mscVersion, (), (const, override));
+     MOCK_METHOD(IExcerptNotationPtr, createEmptyExcerpt, (const QString&), (const, override));
+@@ -333,7 +335,7 @@ public:
+     MOCK_METHOD(const ExcerptNotationList&, potentialExcerpts, (), (const, override));
+     MOCK_METHOD(void, initExcerpts, (const ExcerptNotationList&), (override));
+     MOCK_METHOD(void, setExcerpts, (const ExcerptNotationList&), (override));
+-    MOCK_METHOD(void, resetExcerpt, (IExcerptNotationPtr &), (override));
++    MOCK_METHOD(void, resetExcerpt, (IExcerptNotationPtr), (override));
+     MOCK_METHOD(void, sortExcerpts, (ExcerptNotationList &), (override));
+     MOCK_METHOD(void, setExcerptIsOpen, (const INotationPtr, bool), (override));
+     MOCK_METHOD(INotationPartsPtr, parts, (), (const, override));
+@@ -341,14 +343,12 @@ public:
+     MOCK_METHOD(async::Notification, hasPartsChanged, (), (const, override));
+     MOCK_METHOD(INotationPlaybackPtr, playback, (), (const, override));
+     MOCK_METHOD(void, initNotationSoloMuteState, (const INotationPtr), (override));
+-    MOCK_METHOD(INotationAutomationPtr, automation, (), (const, override));
+ };
+ 
+ engraving::InstrumentTrackId makeTrackId(int partId, const char16_t* instrumentId)
+ {
+     return engraving::InstrumentTrackId { ID(partId), String(instrumentId) };
+ }
+-}
+ 
+ class PianoKeyboardControllerTests : public ::testing::Test, public async::Asyncable
+ {
+@@ -363,12 +363,18 @@ public:
          m_globalContext->setPlaybackState(m_playbackState);
  
          m_notationPlayback = std::make_shared<NiceMock<NotationPlaybackMock> >();
@@ -37291,7 +37406,24 @@ index 13b9bfe3..17726dde 100644
          m_masterNotation = std::make_shared<NiceMock<MasterNotationMock> >();
          ON_CALL(*m_masterNotation, playback()).WillByDefault(Return(m_notationPlayback));
          m_globalContext->setCurrentMasterNotation(m_masterNotation);
-@@ -443,13 +455,14 @@ TEST_F(PianoKeyboardControllerTests, RunningQueriesImmediatelyAndUsesAudibleTrac
+ 
+         m_soloMuteState = std::make_shared<NotationSoloMuteStateFake>();
+         m_interaction = std::make_shared<NiceMock<NotationInteractionMock> >();
++        auto selection = std::make_shared<NiceMock<NotationSelectionMock> >();
++        ON_CALL(*selection, isNone()).WillByDefault(Return(true));
++        ON_CALL(*m_interaction, selection()).WillByDefault(Return(selection));
+         m_midiInput = std::make_shared<NotationMidiInputFake>();
+         m_notation = std::make_shared<NiceMock<NotationMock> >();
+         ON_CALL(*m_notation, soloMuteState()).WillByDefault(Return(m_soloMuteState));
+@@ -405,6 +411,7 @@ public:
+             m_controller->keyStatesChanged().disconnect(this);
+         }
+         m_controller.reset();
++        modularity::ioc(m_iocContext)->reset();
+         modularity::removeIoC(m_iocContext);
+     }
+ 
+@@ -443,13 +450,14 @@ TEST_F(PianoKeyboardControllerTests, RunningQueriesImmediatelyAndUsesAudibleTrac
      EXPECT_CALL(*m_playbackController, audibleInstrumentTrackIds())
      .WillOnce(Return(m_audibleTracks));
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.25), m_audibleTracks))
@@ -37309,7 +37441,7 @@ index 13b9bfe3..17726dde 100644
      EXPECT_EQ(m_keyStatesChangedCount, 1);
  }
  
-@@ -466,11 +479,11 @@ TEST_F(PianoKeyboardControllerTests, CountInWaitsForFirstDifferentPosition)
+@@ -466,11 +474,11 @@ TEST_F(PianoKeyboardControllerTests, CountInWaitsForFirstDifferentPosition)
  
      testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(3.1), m_audibleTracks))
@@ -37323,7 +37455,7 @@ index 13b9bfe3..17726dde 100644
      EXPECT_EQ(m_keyStatesChangedCount, 1);
  }
  
-@@ -486,7 +499,7 @@ TEST_F(PianoKeyboardControllerTests, ResumeFromPauseWaitsForCountInAgain)
+@@ -486,7 +494,7 @@ TEST_F(PianoKeyboardControllerTests, ResumeFromPauseWaitsForCountInAgain)
  
      testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(3.1), m_audibleTracks))
@@ -37332,7 +37464,7 @@ index 13b9bfe3..17726dde 100644
      m_playbackState->setPosition(3.1);
      m_playbackState->setStatus(audio::PlaybackStatus::Paused);
  
-@@ -497,11 +510,12 @@ TEST_F(PianoKeyboardControllerTests, ResumeFromPauseWaitsForCountInAgain)
+@@ -497,11 +505,12 @@ TEST_F(PianoKeyboardControllerTests, ResumeFromPauseWaitsForCountInAgain)
  
      testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(3.2), m_audibleTracks))
@@ -37347,7 +37479,7 @@ index 13b9bfe3..17726dde 100644
      EXPECT_EQ(m_keyStatesChangedCount, 3);
  }
  
-@@ -518,13 +532,13 @@ TEST_F(PianoKeyboardControllerTests, PositionChangesAreIgnoredUnlessRunningAndSa
+@@ -518,13 +527,13 @@ TEST_F(PianoKeyboardControllerTests, PositionChangesAreIgnoredUnlessRunningAndSa
      testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(_, _))
      .Times(2)
@@ -37363,7 +37495,7 @@ index 13b9bfe3..17726dde 100644
      EXPECT_EQ(m_keyStatesChangedCount, 1);
  }
  
-@@ -536,9 +550,12 @@ TEST_F(PianoKeyboardControllerTests, PositionChangesReuseCachedAudibleTracks)
+@@ -536,9 +545,12 @@ TEST_F(PianoKeyboardControllerTests, PositionChangesReuseCachedAudibleTracks)
      EXPECT_CALL(*m_playbackController, audibleInstrumentTrackIds())
      .Times(1)
      .WillOnce(Return(m_audibleTracks));
@@ -37377,7 +37509,7 @@ index 13b9bfe3..17726dde 100644
  
      m_playbackState->setStatus(audio::PlaybackStatus::Running);
      m_playbackState->setPosition(2.0);
-@@ -550,41 +567,44 @@ TEST_F(PianoKeyboardControllerTests, PlaybackTrackChangesInvalidateAudibleTracks
+@@ -550,41 +562,44 @@ TEST_F(PianoKeyboardControllerTests, PlaybackTrackChangesInvalidateAudibleTracks
      enableTracking();
      m_playbackState->setPosition(1.0);
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), m_audibleTracks))
@@ -37429,7 +37561,7 @@ index 13b9bfe3..17726dde 100644
  }
  
  TEST_F(PianoKeyboardControllerTests, PauseStopAndResumePreservePressedKey)
-@@ -593,22 +613,24 @@ TEST_F(PianoKeyboardControllerTests, PauseStopAndResumePreservePressedKey)
+@@ -593,22 +608,24 @@ TEST_F(PianoKeyboardControllerTests, PauseStopAndResumePreservePressedKey)
      enableTracking();
      m_playbackState->setPosition(1.0);
      ON_CALL(*m_notationPlayback, activePlaybackPitches(_, _))
@@ -37460,7 +37592,7 @@ index 13b9bfe3..17726dde 100644
  }
  
  TEST_F(PianoKeyboardControllerTests, PlaybackPreservesSelectionAndMidiStates)
-@@ -639,24 +661,27 @@ TEST_F(PianoKeyboardControllerTests, PlaybackPreservesSelectionAndMidiStates)
+@@ -639,24 +656,27 @@ TEST_F(PianoKeyboardControllerTests, PlaybackPreservesSelectionAndMidiStates)
      enableTracking();
      m_playbackState->setPosition(1.0);
      ON_CALL(*m_notationPlayback, activePlaybackPitches(_, _))
@@ -37495,7 +37627,7 @@ index 13b9bfe3..17726dde 100644
  }
  
  TEST_F(PianoKeyboardControllerTests, SeekReplacesPlaybackKeys)
-@@ -664,15 +689,16 @@ TEST_F(PianoKeyboardControllerTests, SeekReplacesPlaybackKeys)
+@@ -664,15 +684,16 @@ TEST_F(PianoKeyboardControllerTests, SeekReplacesPlaybackKeys)
      enableTracking();
      m_playbackState->setPosition(1.0);
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
@@ -37515,7 +37647,7 @@ index 13b9bfe3..17726dde 100644
      EXPECT_EQ(m_keyStatesChangedCount, 2);
  }
  
-@@ -681,19 +707,20 @@ TEST_F(PianoKeyboardControllerTests, AudibleTracksChangeRefreshesAtSamePosition)
+@@ -681,19 +702,20 @@ TEST_F(PianoKeyboardControllerTests, AudibleTracksChangeRefreshesAtSamePosition)
      enableTracking();
      m_playbackState->setPosition(1.0);
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), m_audibleTracks))
@@ -37539,7 +37671,7 @@ index 13b9bfe3..17726dde 100644
      EXPECT_EQ(m_keyStatesChangedCount, 2);
  }
  
-@@ -702,19 +729,20 @@ TEST_F(PianoKeyboardControllerTests, ChordSymbolsConfigurationChangeRefreshesAtS
+@@ -702,19 +724,20 @@ TEST_F(PianoKeyboardControllerTests, ChordSymbolsConfigurationChangeRefreshesAtS
      enableTracking();
      m_playbackState->setPosition(1.0);
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
@@ -37563,7 +37695,7 @@ index 13b9bfe3..17726dde 100644
      EXPECT_EQ(m_keyStatesChangedCount, 2);
  }
  
-@@ -723,19 +751,20 @@ TEST_F(PianoKeyboardControllerTests, SelectionChangeRefreshesRangePlaybackAtSame
+@@ -723,19 +746,20 @@ TEST_F(PianoKeyboardControllerTests, SelectionChangeRefreshesRangePlaybackAtSame
      enableTracking();
      m_playbackState->setPosition(1.0);
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
@@ -37587,7 +37719,7 @@ index 13b9bfe3..17726dde 100644
      EXPECT_EQ(m_keyStatesChangedCount, 2);
  }
  
-@@ -755,21 +784,22 @@ TEST_F(PianoKeyboardControllerTests, DisabledTrackingDoesNotQueryOrNotifyAndReop
+@@ -755,21 +779,22 @@ TEST_F(PianoKeyboardControllerTests, DisabledTrackingDoesNotQueryOrNotifyAndReop
  
      testing::Mock::VerifyAndClearExpectations(m_notationPlayback.get());
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(2.1), m_audibleTracks))
@@ -37614,7 +37746,7 @@ index 13b9bfe3..17726dde 100644
      EXPECT_EQ(m_keyStatesChangedCount, 2);
  }
  
-@@ -778,7 +808,7 @@ TEST_F(PianoKeyboardControllerTests, CurrentNotationSwitchRefreshesAndDisconnect
+@@ -778,7 +803,7 @@ TEST_F(PianoKeyboardControllerTests, CurrentNotationSwitchRefreshesAndDisconnect
      enableTracking();
      m_playbackState->setPosition(1.0);
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
@@ -37623,7 +37755,7 @@ index 13b9bfe3..17726dde 100644
      m_playbackState->setStatus(audio::PlaybackStatus::Running);
  
      auto replacementSoloMuteState = std::make_shared<NotationSoloMuteStateFake>();
-@@ -790,22 +820,24 @@ TEST_F(PianoKeyboardControllerTests, CurrentNotationSwitchRefreshesAndDisconnect
+@@ -790,22 +815,24 @@ TEST_F(PianoKeyboardControllerTests, CurrentNotationSwitchRefreshesAndDisconnect
      ON_CALL(*replacementNotation, midiInput()).WillByDefault(Return(replacementMidiInput));
  
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), m_audibleTracks))
@@ -37652,7 +37784,7 @@ index 13b9bfe3..17726dde 100644
  }
  
  TEST_F(PianoKeyboardControllerTests, MasterNotationSwitchAndMissingMasterRefreshPlayback)
-@@ -813,21 +845,25 @@ TEST_F(PianoKeyboardControllerTests, MasterNotationSwitchAndMissingMasterRefresh
+@@ -813,21 +840,25 @@ TEST_F(PianoKeyboardControllerTests, MasterNotationSwitchAndMissingMasterRefresh
      enableTracking();
      m_playbackState->setPosition(1.0);
      EXPECT_CALL(*m_notationPlayback, activePlaybackPitches(audio::secs_t(1.0), _))
@@ -37681,7 +37813,7 @@ index 13b9bfe3..17726dde 100644
  }
  
  TEST_F(PianoKeyboardControllerTests, DestructionDisconnectsPlaybackSubscriptions)
-@@ -839,3 +875,86 @@ TEST_F(PianoKeyboardControllerTests, DestructionDisconnectsPlaybackSubscriptions
+@@ -839,3 +870,87 @@ TEST_F(PianoKeyboardControllerTests, DestructionDisconnectsPlaybackSubscriptions
      m_playbackState->setPosition(10.0);
      SUCCEED();
  }
@@ -37768,6 +37900,7 @@ index 13b9bfe3..17726dde 100644
 +    m_controller->setPressedKey(std::nullopt);
 +    EXPECT_EQ(m_controller->keyPlaybackLayer(64), 2u);
 +}
++}
 diff --git a/src/palette/internal/paletteactionscontroller.cpp b/src/palette/internal/paletteactionscontroller.cpp
 index 4e607210..f42dc2a8 100644
 --- a/src/palette/internal/paletteactionscontroller.cpp
@@ -37799,6 +37932,74 @@ index 26f239ab..86c1e5be 100644
      internal/playbackuiactions.cpp
      internal/playbackuiactions.h
      internal/playbackconfiguration.cpp
+diff --git a/src/playback/internal/audibleinstrumenttracks.h b/src/playback/internal/audibleinstrumenttracks.h
+new file mode 100644
+index 00000000..833de82b
+--- /dev/null
++++ b/src/playback/internal/audibleinstrumenttracks.h
+@@ -0,0 +1,62 @@
++#ifndef MU_PLAYBACK_AUDIBLEINSTRUMENTTRACKS_H
++#define MU_PLAYBACK_AUDIBLEINSTRUMENTTRACKS_H
++
++#include <vector>
++
++#include "notation/inotationsolomutestate.h"
++
++namespace mu::playback::detail {
++struct InstrumentTrackSoloMuteState {
++    engraving::InstrumentTrackId instrumentTrackId;
++    notation::INotationSoloMuteState::SoloMuteState soloMuteState;
++    bool hasPlaybackTrack = false;
++    bool isMetronome = false;
++    bool isChordSymbols = false;
++};
++struct EffectiveTrackSoloMuteState {
++    engraving::InstrumentTrackId instrumentTrackId;
++    notation::INotationSoloMuteState::SoloMuteState soloMuteState;
++    bool forceMute = false;
++};
++
++inline std::vector<EffectiveTrackSoloMuteState> resolveEffectiveTrackSoloMuteStates(
++    const std::vector<InstrumentTrackSoloMuteState>& trackStates, bool playChordSymbols, bool isRangePlaybackMode,
++    const engraving::InstrumentTrackIdSet& allowedInstrumentTrackIds)
++{
++    bool hasSolo = false;
++    for (const auto& state : trackStates) {
++        if (!state.isMetronome && state.hasPlaybackTrack && state.soloMuteState.solo) {
++            hasSolo = true;
++            break;
++        }
++    }
++    std::vector<EffectiveTrackSoloMuteState> result;
++    for (const auto& state : trackStates) {
++        if (!state.hasPlaybackTrack || state.isMetronome) {
++            continue;
++        }
++        bool shouldForceMute = hasSolo && !state.soloMuteState.solo;
++        if (state.isChordSymbols && !shouldForceMute) {
++            shouldForceMute = !playChordSymbols;
++        }
++        if (isRangePlaybackMode && !shouldForceMute) {
++            shouldForceMute = allowedInstrumentTrackIds.count(state.instrumentTrackId) == 0;
++        }
++        result.push_back({ state.instrumentTrackId, state.soloMuteState, shouldForceMute });
++    }
++    return result;
++}
++
++inline engraving::InstrumentTrackIdSet audibleInstrumentTrackIds(const std::vector<EffectiveTrackSoloMuteState>& trackStates)
++{
++    engraving::InstrumentTrackIdSet result;
++    for (const auto& state : trackStates) {
++        if (!state.soloMuteState.mute && !state.forceMute) {
++            result.insert(state.instrumentTrackId);
++        }
++    }
++    return result;
++}
++}
++
++#endif
 diff --git a/src/playback/internal/onlinesoundscontroller.cpp b/src/playback/internal/onlinesoundscontroller.cpp
 deleted file mode 100644
 index bcb07e4b..00000000
@@ -38416,7 +38617,7 @@ index 4aedde8e..acd5fa5d 100644
  
      muse::async::Channel<bool> m_muteHiddenInstrumentsChanged;
 diff --git a/src/playback/internal/playbackcontroller.cpp b/src/playback/internal/playbackcontroller.cpp
-index e8bc8f81..09ac6fb6 100644
+index e8bc8f81..899dcdbc 100644
 --- a/src/playback/internal/playbackcontroller.cpp
 +++ b/src/playback/internal/playbackcontroller.cpp
 @@ -20,11 +20,11 @@
@@ -38440,16 +38641,45 @@ index e8bc8f81..09ac6fb6 100644
  
  static const ActionCode PLAY_CODE("play");
  static const ActionCode PLAY_FROM_SELECTION("play-from-selection");
-@@ -128,7 +127,7 @@ InstrumentTrackIdSet mu::playback::detail::audibleInstrumentTrackIds(const std::
+@@ -99,36 +98,8 @@ static std::string resolveAuxTrackTitle(aux_channel_idx_t index, const AudioOutp
+     return muse::mtrc("playback", "Aux %1").arg(index + 1).toStdString();
  }
  
+-std::vector<mu::playback::detail::EffectiveTrackSoloMuteState> mu::playback::detail::resolveEffectiveTrackSoloMuteStates(
+-    const std::vector<InstrumentTrackSoloMuteState>& trackStates, bool playChordSymbols, bool isRangePlaybackMode,
+-    const InstrumentTrackIdSet& allowedInstrumentTrackIds)
+-{
+-    bool hasSolo = false;
+-    for (const auto& state : trackStates) {
+-        if (!state.isMetronome && state.hasPlaybackTrack && state.soloMuteState.solo) { hasSolo = true; break; }
+-    }
+-    std::vector<EffectiveTrackSoloMuteState> result;
+-    for (const auto& state : trackStates) {
+-        if (!state.hasPlaybackTrack || state.isMetronome) continue;
+-        bool shouldForceMute = hasSolo && !state.soloMuteState.solo;
+-        if (state.isChordSymbols && !shouldForceMute) shouldForceMute = !playChordSymbols;
+-        if (isRangePlaybackMode && !shouldForceMute) shouldForceMute = !muse::contains(allowedInstrumentTrackIds, state.instrumentTrackId);
+-        result.push_back({ state.instrumentTrackId, state.soloMuteState, shouldForceMute });
+-    }
+-    return result;
+-}
+-
+-InstrumentTrackIdSet mu::playback::detail::audibleInstrumentTrackIds(const std::vector<EffectiveTrackSoloMuteState>& trackStates)
+-{
+-    InstrumentTrackIdSet result;
+-    for (const auto& state : trackStates) {
+-        if (!state.soloMuteState.mute && !state.forceMute) result.insert(state.instrumentTrackId);
+-    }
+-    return result;
+-}
+-
  PlaybackController::PlaybackController(const muse::modularity::ContextPtr& iocCtx)
 -    : muse::Contextable(iocCtx), m_drumsetLoader(iocCtx), m_onlineSoundsController(std::make_unique<OnlineSoundsController>(iocCtx))
 +    : muse::Contextable(iocCtx), m_drumsetLoader(iocCtx)
  {
  }
  
-@@ -157,8 +156,6 @@ void PlaybackController::init()
+@@ -157,8 +128,6 @@ void PlaybackController::init()
      dispatcher()->reg(this, TOGGLE_HEAR_PLAYBACK_WHEN_EDITING_CODE, this, &PlaybackController::toggleHearPlaybackWhenEditing);
      dispatcher()->reg(this, "playback-reload-cache", this, &PlaybackController::reloadPlaybackCache);
  
@@ -38458,7 +38688,7 @@ index e8bc8f81..09ac6fb6 100644
      globalContext()->currentNotationChanged().onNotify(this, [this]() {
          onNotationChanged();
      });
-@@ -312,11 +309,6 @@ InstrumentTrackIdSet PlaybackController::audibleInstrumentTrackIds() const
+@@ -312,11 +281,6 @@ InstrumentTrackIdSet PlaybackController::audibleInstrumentTrackIds() const
      return detail::audibleInstrumentTrackIds(effectiveTrackSoloMuteStates());
  }
  
@@ -38470,7 +38700,7 @@ index e8bc8f81..09ac6fb6 100644
  Channel<TrackId> PlaybackController::trackAdded() const
  {
      return m_trackAdded;
-@@ -332,16 +324,6 @@ Channel<TrackId> PlaybackController::trackRemoved() const
+@@ -332,16 +296,6 @@ Channel<TrackId> PlaybackController::trackRemoved() const
      return m_trackRemoved;
  }
  
@@ -38487,7 +38717,7 @@ index e8bc8f81..09ac6fb6 100644
  Promise<SoundPresetList> PlaybackController::availableSoundPresets(const InstrumentTrackId& instrumentTrackId) const
  {
      auto it = m_instrumentTrackIdMap.find(instrumentTrackId);
-@@ -488,7 +470,7 @@ void PlaybackController::seekRangeSelection()
+@@ -488,7 +442,7 @@ void PlaybackController::seekRangeSelection()
      seekRawTick(startTick);
  }
  
@@ -38496,7 +38726,7 @@ index e8bc8f81..09ac6fb6 100644
                                                  const AudioResourceMeta& oldMeta, const AudioResourceMeta& newMeta)
  {
      INotationPlaybackPtr notationPlayback = this->notationPlayback();
-@@ -505,15 +487,6 @@ void PlaybackController::onAudioResourceChanged(const TrackId trackId, const Ins
+@@ -505,15 +459,6 @@ void PlaybackController::onAudioResourceChanged(const TrackId trackId, const Ins
      }
  
      notationPlayback->removeSoundFlags({ instrumentTrackId });
@@ -38512,7 +38742,7 @@ index e8bc8f81..09ac6fb6 100644
  }
  
  bool PlaybackController::shouldLoadDrumset(const engraving::InstrumentTrackId& instrumentTrackId,
-@@ -658,11 +631,6 @@ void PlaybackController::togglePlay(bool showErrors)
+@@ -658,11 +603,6 @@ void PlaybackController::togglePlay(bool showErrors)
          return;
      }
  
@@ -38524,7 +38754,7 @@ index e8bc8f81..09ac6fb6 100644
      interaction()->endEditElement();
  
      if (isPlaying()) {
-@@ -689,11 +657,6 @@ void PlaybackController::togglePlay(bool showErrors)
+@@ -689,11 +629,6 @@ void PlaybackController::togglePlay(bool showErrors)
  
  void PlaybackController::playFromSelection(bool showErrors)
  {
@@ -38536,7 +38766,7 @@ index e8bc8f81..09ac6fb6 100644
      int startTick = 0;
  
      if (!selection()->isNone()) {
-@@ -826,11 +789,9 @@ void PlaybackController::onPlaybackStatusChanged()
+@@ -826,11 +761,9 @@ void PlaybackController::onPlaybackStatusChanged()
      }
  
      bool playing = isPlaying();
@@ -38549,7 +38779,7 @@ index e8bc8f81..09ac6fb6 100644
      }
  }
  
-@@ -1103,8 +1064,6 @@ void PlaybackController::resetCurrentSequence()
+@@ -1103,8 +1036,6 @@ void PlaybackController::resetCurrentSequence()
  
      m_player = nullptr;
      globalContext()->setCurrentPlayer(nullptr);
@@ -38558,7 +38788,7 @@ index e8bc8f81..09ac6fb6 100644
  }
  
  void PlaybackController::addTrack(const InstrumentTrackId& instrumentTrackId, bool projectHadNoAudioSettings,
-@@ -1162,14 +1121,11 @@ void PlaybackController::doAddTrack(const InstrumentTrackId& instrumentTrackId,
+@@ -1162,14 +1093,11 @@ void PlaybackController::doAddTrack(const InstrumentTrackId& instrumentTrackId,
  
      bool isMetronome = notationPlayback()->metronomeTrackId() == instrumentTrackId;
  
@@ -38577,7 +38807,7 @@ index e8bc8f81..09ac6fb6 100644
      }
  
      if (!isMetronome && outParams.auxSends.empty()) {
-@@ -1195,7 +1151,7 @@ void PlaybackController::doAddTrack(const InstrumentTrackId& instrumentTrackId,
+@@ -1195,7 +1123,7 @@ void PlaybackController::doAddTrack(const InstrumentTrackId& instrumentTrackId,
          m_instrumentTrackIdMap.insert({ instrumentTrackId, trackId });
  
          const bool trackNewlyAdded = projectHadNoAudioSettings || !audioSettings()->trackHasExistingOutputParams(instrumentTrackId);
@@ -38586,7 +38816,7 @@ index e8bc8f81..09ac6fb6 100644
          audioSettings()->setTrackOutputParams(instrumentTrackId, appliedParams.out, !projectHadNoAudioSettings);
  
          updateSoloMuteStates();
-@@ -1211,14 +1167,6 @@ void PlaybackController::doAddTrack(const InstrumentTrackId& instrumentTrackId,
+@@ -1211,14 +1139,6 @@ void PlaybackController::doAddTrack(const InstrumentTrackId& instrumentTrackId,
          if (shouldLoadDrumset(instrumentTrackId, originMeta, appliedParams.in.resourceMeta)) {
              m_drumsetLoader.loadDrumset(m_notation, instrumentTrackId, appliedParams.in.resourceMeta);
          }
@@ -38601,7 +38831,7 @@ index e8bc8f81..09ac6fb6 100644
      })
      .onReject(this, [instrumentTrackId, onFinished](int code, const std::string& msg) {
          LOGE() << "can't add a new track, code: [" << code << "] " << msg;
-@@ -1328,8 +1276,6 @@ void PlaybackController::removeTrack(const InstrumentTrackId& instrumentTrackId)
+@@ -1328,8 +1248,6 @@ void PlaybackController::removeTrack(const InstrumentTrackId& instrumentTrackId)
          }
      }
  
@@ -38610,7 +38840,7 @@ index e8bc8f81..09ac6fb6 100644
      m_trackRemoved.send(search->second);
      m_instrumentTrackIdMap.erase(instrumentTrackId);
  }
-@@ -1356,7 +1302,6 @@ void PlaybackController::setupNewCurrentSequence(const TrackSequenceId sequenceI
+@@ -1356,7 +1274,6 @@ void PlaybackController::setupNewCurrentSequence(const TrackSequenceId sequenceI
      playback()->removeAllTracks(m_currentSequenceId);
  
      m_currentSequenceId = sequenceId;
@@ -38618,7 +38848,7 @@ index e8bc8f81..09ac6fb6 100644
      m_player = playback()->player(sequenceId);
      globalContext()->setCurrentPlayer(m_player);
  
-@@ -1424,14 +1369,7 @@ void PlaybackController::subscribeOnAudioParamsChanges()
+@@ -1424,14 +1341,7 @@ void PlaybackController::subscribeOnAudioParamsChanges()
  
          if (auxIt != m_auxTrackIdMap.end()) {
              aux_channel_idx_t auxIdx = auxIt->first;
@@ -38633,7 +38863,7 @@ index e8bc8f81..09ac6fb6 100644
          }
      });
  }
-@@ -1823,9 +1761,7 @@ bool PlaybackController::canReceiveAction(const ActionCode& code) const
+@@ -1823,9 +1733,7 @@ bool PlaybackController::canReceiveAction(const ActionCode& code) const
          return false;
      }
  
@@ -38644,7 +38874,7 @@ index e8bc8f81..09ac6fb6 100644
  
      static const std::unordered_set<ActionCode> REQUIRES_MEASURES {
          PLAY_CODE,
-@@ -1846,21 +1782,6 @@ bool PlaybackController::canReceiveAction(const ActionCode& code) const
+@@ -1846,21 +1754,6 @@ bool PlaybackController::canReceiveAction(const ActionCode& code) const
      return true;
  }
  
@@ -38667,26 +38897,46 @@ index e8bc8f81..09ac6fb6 100644
  {
      return secs_t(notationPlayback()->playedTickToSec(tick));
 diff --git a/src/playback/internal/playbackcontroller.h b/src/playback/internal/playbackcontroller.h
-index 2a6d7c78..4ac4a7c9 100644
+index 2a6d7c78..ee53175f 100644
 --- a/src/playback/internal/playbackcontroller.h
 +++ b/src/playback/internal/playbackcontroller.h
-@@ -35,7 +35,6 @@
+@@ -35,34 +35,15 @@
  #include "audio/main/iplayback.h"
  #include "audio/common/audiotypes.h"
  #include "iinteractive.h"
 -#include "tours/itoursservice.h"
  
  #include "drumsetloader.h"
++#include "audibleinstrumenttracks.h"
  
-@@ -44,7 +43,6 @@
+ #include "../iplaybackcontroller.h"
+ #include "../iplaybackconfiguration.h"
  #include "../isoundprofilesrepository.h"
  
  namespace mu::playback {
 -class OnlineSoundsController;
- namespace detail {
- struct InstrumentTrackSoloMuteState {
-     engraving::InstrumentTrackId instrumentTrackId;
-@@ -73,7 +71,6 @@ class PlaybackController : public IPlaybackController, public muse::actions::Act
+-namespace detail {
+-struct InstrumentTrackSoloMuteState {
+-    engraving::InstrumentTrackId instrumentTrackId;
+-    IPlaybackController::SoloMuteState soloMuteState;
+-    bool hasPlaybackTrack = false;
+-    bool isMetronome = false;
+-    bool isChordSymbols = false;
+-};
+-struct EffectiveTrackSoloMuteState {
+-    engraving::InstrumentTrackId instrumentTrackId;
+-    IPlaybackController::SoloMuteState soloMuteState;
+-    bool forceMute = false;
+-};
+-std::vector<EffectiveTrackSoloMuteState> resolveEffectiveTrackSoloMuteStates(
+-    const std::vector<InstrumentTrackSoloMuteState>& trackStates, bool playChordSymbols, bool isRangePlaybackMode,
+-    const engraving::InstrumentTrackIdSet& allowedInstrumentTrackIds);
+-engraving::InstrumentTrackIdSet audibleInstrumentTrackIds(const std::vector<EffectiveTrackSoloMuteState>& trackStates);
+-}
+ class PlaybackController : public IPlaybackController, public muse::actions::Actionable, public muse::async::Asyncable,
+     public muse::Contextable
+ {
+@@ -73,7 +54,6 @@ class PlaybackController : public IPlaybackController, public muse::actions::Act
      muse::ContextInject<muse::audio::IPlayback> playback = { this };
      muse::ContextInject<ISoundProfilesRepository> profilesRepo = { this };
      muse::ContextInject<muse::IInteractive> interactive = { this };
@@ -38694,7 +38944,7 @@ index 2a6d7c78..4ac4a7c9 100644
  
  public:
      PlaybackController(const muse::modularity::ContextPtr& iocCtx);
-@@ -96,15 +93,11 @@ public:
+@@ -96,15 +76,11 @@ public:
  
      const InstrumentTrackIdMap& instrumentTrackIdMap() const override;
      engraving::InstrumentTrackIdSet audibleInstrumentTrackIds() const override;
@@ -38710,7 +38960,7 @@ index 2a6d7c78..4ac4a7c9 100644
      muse::async::Promise<muse::audio::SoundPresetList> availableSoundPresets(
          const engraving::InstrumentTrackId& instrumentTrackId) const override;
  
-@@ -148,9 +141,6 @@ public:
+@@ -148,9 +124,6 @@ public:
  
      bool canReceiveAction(const muse::actions::ActionCode& code) const override;
  
@@ -38720,7 +38970,7 @@ index 2a6d7c78..4ac4a7c9 100644
  
  private:
      muse::audio::IPlayerPtr currentPlayer() const;
-@@ -273,8 +263,6 @@ private:
+@@ -273,8 +246,6 @@ private:
      muse::async::Channel<muse::audio::TrackId> m_trackRemoved;
      muse::async::Channel<bool> m_playbackInitedChanged;
  
@@ -38729,7 +38979,7 @@ index 2a6d7c78..4ac4a7c9 100644
      muse::async::Asyncable m_seqAsyncReceiver; //! HACK - see PlaybackController::setupSequenceTracks
  
      InstrumentTrackIdMap m_instrumentTrackIdMap;
-@@ -287,7 +275,6 @@ private:
+@@ -287,7 +258,6 @@ private:
      bool m_isRangeSelection = false;
  
      DrumsetLoader m_drumsetLoader;
@@ -39016,11 +39266,52 @@ index 279583f1..bff5f5aa 100644
          PlaybackToolBar.qml
          SoundFlagPopup.qml
 diff --git a/src/playback/qml/MuseScore/Playback/MixerPanel.qml b/src/playback/qml/MuseScore/Playback/MixerPanel.qml
-index 0cbe7bcc..9fe8af2a 100644
+index 0cbe7bcc..fc571004 100644
 --- a/src/playback/qml/MuseScore/Playback/MixerPanel.qml
 +++ b/src/playback/qml/MuseScore/Playback/MixerPanel.qml
-@@ -143,7 +143,7 @@ ColumnLayout {
-         ScrollBar.vertical: StyledScrollBar { policy: ScrollBar.AlwaysOn }
+@@ -47,15 +47,18 @@ ColumnLayout {
+     signal resizeRequested(var newWidth, var newHeight)
+ 
+     spacing: 0
++    implicitWidth: flickable.contentWidth + (verticalScrollBar.isScrollbarNeeded ? verticalScrollBar.implicitWidth : 0)
++    implicitHeight: contentColumn.height + (horizontalScrollBar.isScrollbarNeeded ? scrollBarRow.height : 0)
+ 
+-    function resizePanelToContentHeight() {
++    function resizePanelToContent() {
+         if (contentColumn.completed && implicitHeight > 0) {
+-            root.resizeRequested(width, implicitHeight)
++            root.resizeRequested(implicitWidth, implicitHeight)
+         }
+     }
+ 
++    onImplicitWidthChanged: Qt.callLater(root.resizePanelToContent)
+     onImplicitHeightChanged: {
+-        root.resizePanelToContentHeight()
++        Qt.callLater(root.resizePanelToContent)
+     }
+ 
+     QtObject {
+@@ -131,19 +134,24 @@ ColumnLayout {
+         Layout.fillWidth: true
+         Layout.fillHeight: true
+ 
+-        contentWidth: contentColumn.width + 1 // for trailing separator
++        contentWidth: (contextMenuModel.labelsSectionVisible ? prv.headerWidth + 1 : 0)
++                      + mixerPanelModel.count * (prv.channelItemWidth + 1)
+         contentHeight: Math.max(contentColumn.height, height)
+ 
++        implicitWidth: contentWidth
+         implicitHeight: contentColumn.height
+ 
+         interactive: (height < contentHeight || width < contentWidth) && !flickable.resourcePickingActive
+ 
+         ScrollBar.horizontal: horizontalScrollBar
+ 
+-        ScrollBar.vertical: StyledScrollBar { policy: ScrollBar.AlwaysOn }
++        ScrollBar.vertical: StyledScrollBar {
++            id: verticalScrollBar
++            policy: ScrollBar.AlwaysOn
++        }
  
          property bool completed: false
 -        property bool resourcePickingActive: soundSection.resourcePickingActive || fxSection.resourcePickingActive
@@ -39028,7 +39319,23 @@ index 0cbe7bcc..9fe8af2a 100644
  
          function positionViewAtEnd() {
              if (!flickable.completed) {
-@@ -212,79 +212,6 @@ ColumnLayout {
+@@ -184,13 +192,14 @@ ColumnLayout {
+             id: contentColumn
+ 
+             anchors.bottom: parent.bottom
+-            width: childrenRect.width
++            width: flickable.contentWidth
+             spacing: 0
+ 
+             property bool completed: false
+ 
+             Component.onCompleted: {
+                 contentColumn.completed = true
++                Qt.callLater(root.resizePanelToContent)
+             }
+ 
+             MixerSoundSection {
+@@ -212,79 +221,6 @@ ColumnLayout {
                  }
              }
  
@@ -39108,6 +39415,14 @@ index 0cbe7bcc..9fe8af2a 100644
              MixerFaderSection {
                  id: faderSection
  
+@@ -346,6 +282,7 @@ ColumnLayout {
+     }
+ 
+     Column {
++        id: scrollBarRow
+         spacing: 0
+         Layout.fillWidth: true
+         visible: horizontalScrollBar.isScrollbarNeeded
 diff --git a/src/playback/qml/MuseScore/Playback/NotationRegionsBeingProcessedView.qml b/src/playback/qml/MuseScore/Playback/NotationRegionsBeingProcessedView.qml
 deleted file mode 100644
 index d3f6a644..00000000
@@ -40632,6 +40947,19 @@ index ccf7d8b8..06bd1667 100644
                  visible: content.channelItem.type !== MixerChannelItem.Master && content.channelItem.type !== MixerChannelItem.Metronome
  
                  navigation.name: "SoloButton"
+diff --git a/src/playback/qml/MuseScore/Playback/internal/MixerPanelSection.qml b/src/playback/qml/MuseScore/Playback/internal/MixerPanelSection.qml
+index f02452db..46066866 100644
+--- a/src/playback/qml/MuseScore/Playback/internal/MixerPanelSection.qml
++++ b/src/playback/qml/MuseScore/Playback/internal/MixerPanelSection.qml
+@@ -79,7 +79,7 @@ Loader {
+ 
+             anchors.top: parent.top
+             anchors.topMargin: root.spacingAbove
+-            width: contentItem.childrenRect.width
++            width: count * root.channelItemWidth + Math.max(0, count - 1) * spacing
+             height: Math.max(1, contentHeight) // HACK: if the height is 0, the listview won't create any delegates
+             contentHeight: contentItem.childrenRect.height
+ 
 diff --git a/src/playback/qml/MuseScore/Playback/internal/MixerSoundSection.qml b/src/playback/qml/MuseScore/Playback/internal/MixerSoundSection.qml
 index f0189768..43cdd7c2 100644
 --- a/src/playback/qml/MuseScore/Playback/internal/MixerSoundSection.qml
@@ -40746,6 +41074,19 @@ index f4f354a2..00000000
 -        }
 -    }
 -}
+diff --git a/src/playback/qml/MuseScore/Playback/internal/PlaybackToolBarActions.qml b/src/playback/qml/MuseScore/Playback/internal/PlaybackToolBarActions.qml
+index 4f3fafbe..575a9039 100644
+--- a/src/playback/qml/MuseScore/Playback/internal/PlaybackToolBarActions.qml
++++ b/src/playback/qml/MuseScore/Playback/internal/PlaybackToolBarActions.qml
+@@ -52,7 +52,7 @@ Item {
+ 
+         anchors.left: parent.left
+ 
+-        width: contentWidth
++        width: count * 30 + Math.max(0, count - 1) * spacing
+         height: contentHeight
+ 
+         contentHeight: root.height
 diff --git a/src/playback/qml/MuseScore/Playback/internal/VolumePressureMeter.qml b/src/playback/qml/MuseScore/Playback/internal/VolumePressureMeter.qml
 deleted file mode 100644
 index 918376f8..00000000
@@ -41865,7 +42206,7 @@ index 34b18edc..529fe7fd 100644
      void emitMixerSectionVisibilityChanged(MixerSectionType sectionType);
  
 diff --git a/src/playback/qml/MuseScore/Playback/mixerpanelmodel.cpp b/src/playback/qml/MuseScore/Playback/mixerpanelmodel.cpp
-index 2d760d2c..57cd1ead 100644
+index 2d760d2c..6d4e820c 100644
 --- a/src/playback/qml/MuseScore/Playback/mixerpanelmodel.cpp
 +++ b/src/playback/qml/MuseScore/Playback/mixerpanelmodel.cpp
 @@ -21,6 +21,7 @@
@@ -41978,7 +42319,48 @@ index 2d760d2c..57cd1ead 100644
      // - the InstrumentTrackIds from the mixer channel items are always a correctly
      //   sorted subset of the InstrumentTrackIds from NotationParts
      if (notationPlayback()->isChordSymbolsTrack(newInstrumentTrackId)) {
-@@ -463,18 +404,11 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
+@@ -429,6 +370,22 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
+     item->setInstrumentTrackId(instrumentTrackId);
+     item->setPanelSection(m_navigationSection);
+     item->loadSoloMuteState(controller()->trackSoloMuteState(instrumentTrackId));
++    if (type == MixerChannelItem::Type::Metronome) {
++        item->setTitle(muse::qtrc("playback", "Metronome"));
++    } else if (notationPlayback()->isChordSymbolsTrack(instrumentTrackId)) {
++        item->setTitle(muse::qtrc("playback", "Chord symbols"));
++    } else {
++        const Part* part = masterNotationParts()->part(instrumentTrackId.partId);
++        const Instrument* instrument = part ? part->instrumentById(instrumentTrackId.instrumentId) : nullptr;
++        QString title = part && isPrimary ? part->partName().toQString() : QString();
++        if (title.isEmpty() && instrument) {
++            title = instrument->trackName().toQString();
++        }
++        if (title.isEmpty() && part) {
++            title = part->instrumentName().toQString();
++        }
++        item->setTitle(title.isEmpty() ? muse::qtrc("playback", "Instrument") : title);
++    }
+ 
+     playback()->inputParams(m_currentTrackSequenceId, trackId)
+     .onResolve(this, [this, trackId](AudioInputParams inParams) {
+@@ -441,17 +398,6 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
+                << ", " << text;
+     });
+ 
+-    playback()->trackName(m_currentTrackSequenceId, trackId)
+-    .onResolve(this, [this, trackId](const RetVal<TrackName>& trackName) {
+-        if (trackName.ret) {
+-            if (MixerChannelItem* item = findChannelItem(trackId)) {
+-                item->setTitle(QString::fromStdString(trackName.val));
+-            }
+-        } else {
+-            LOGE() << "unable to get track name, error: " << trackName.ret.toString();
+-        }
+-    });
+-
+     playback()->outputParams(m_currentTrackSequenceId, trackId)
+     .onResolve(this, [this, trackId](AudioOutputParams outParams) {
+         if (MixerChannelItem* item = findChannelItem(trackId)) {
+@@ -463,18 +409,11 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
                 << ", " << text;
      });
  
@@ -42001,7 +42383,7 @@ index 2d760d2c..57cd1ead 100644
          playback()->setInputParams(m_currentTrackSequenceId, trackId, params);
      });
  
-@@ -482,13 +416,6 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
+@@ -482,13 +421,6 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
          playback()->setOutputParams(m_currentTrackSequenceId, trackId, params);
      });
  
@@ -42015,7 +42397,7 @@ index 2d760d2c..57cd1ead 100644
      connect(item, &MixerChannelItem::soloMuteStateChanged, this,
              [this, instrumentTrackId](const notation::INotationSoloMuteState::SoloMuteState& state) {
          controller()->setTrackSoloMuteState(instrumentTrackId, state);
-@@ -497,57 +424,6 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
+@@ -497,57 +429,6 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
      return item;
  }
  
@@ -42073,7 +42455,7 @@ index 2d760d2c..57cd1ead 100644
  MixerChannelItem* MixerPanelModel::buildMasterChannelItem()
  {
      MixerChannelItem* item = new MixerChannelItem(this, MixerChannelItem::Type::Master, true /*outputOnly*/);
-@@ -565,21 +441,14 @@ MixerChannelItem* MixerPanelModel::buildMasterChannelItem()
+@@ -565,21 +446,14 @@ MixerChannelItem* MixerPanelModel::buildMasterChannelItem()
                 << ", " << text;
      });
  
@@ -42099,7 +42481,7 @@ index 2d760d2c..57cd1ead 100644
      return item;
  }
  
-@@ -606,26 +475,6 @@ void MixerPanelModel::loadOutputParams(MixerChannelItem* item, AudioOutputParams
+@@ -606,26 +480,6 @@ void MixerPanelModel::loadOutputParams(MixerChannelItem* item, AudioOutputParams
      }
  
      item->loadOutputParams(std::move(params));
@@ -42126,7 +42508,7 @@ index 2d760d2c..57cd1ead 100644
  }
  
  INotationProjectPtr MixerPanelModel::currentProject() const
-@@ -633,11 +482,6 @@ INotationProjectPtr MixerPanelModel::currentProject() const
+@@ -633,11 +487,6 @@ INotationProjectPtr MixerPanelModel::currentProject() const
      return context()->currentProject();
  }
  
@@ -43562,24 +43944,118 @@ index d6795e05..abb954d5 100644
  }
  
 diff --git a/src/playback/tests/playbackcontroller_tests.cpp b/src/playback/tests/playbackcontroller_tests.cpp
-index 42799407..eac27055 100644
+index 42799407..5486bebb 100644
 --- a/src/playback/tests/playbackcontroller_tests.cpp
 +++ b/src/playback/tests/playbackcontroller_tests.cpp
-@@ -23,6 +23,10 @@
+@@ -23,13 +23,16 @@
  #include <gtest/gtest.h>
  
  #include <vector>
 +#include <QJsonDocument>
-+
+ 
+-#include "playback/internal/playbackcontroller.h"
+-
+-using namespace mu::engraving;
+-using namespace mu::playback;
 +#include "playback/internal/rememberedinputslot.h"
++#include "playback/internal/audibleinstrumenttracks.h"
 +#include "project/audioinputparamsjson.h"
  
- #include "playback/internal/playbackcontroller.h"
+ namespace {
++using mu::engraving::InstrumentTrackId;
++using mu::engraving::InstrumentTrackIdSet;
++namespace detail = mu::playback::detail;
+ InstrumentTrackId makeTrackId(int partId)
+ {
+     return { muse::ID(partId), u"instrument" };
+@@ -70,8 +73,8 @@ TEST(PlaybackControllerTests, UnmutedPlaybackTracksAreAudible)
+     });
  
-@@ -175,3 +179,55 @@ TEST(PlaybackControllerTests, SoloTrackWithoutPlaybackChannelDoesNotMuteLoadedTr
-     EXPECT_TRUE(result.contains(loadedTrackId));
-     EXPECT_FALSE(result.contains(unloadedSoloTrackId));
+     EXPECT_EQ(result.size(), 2u);
+-    EXPECT_TRUE(result.contains(firstTrackId));
+-    EXPECT_TRUE(result.contains(secondTrackId));
++    EXPECT_TRUE(result.count(firstTrackId) != 0);
++    EXPECT_TRUE(result.count(secondTrackId) != 0);
  }
+ 
+ TEST(PlaybackControllerTests, PersistentOrExcerptMuteMakesTrackInaudible)
+@@ -84,8 +87,8 @@ TEST(PlaybackControllerTests, PersistentOrExcerptMuteMakesTrackInaudible)
+         makeTrackState(audibleTrackId)
+     });
+ 
+-    EXPECT_FALSE(result.contains(mutedTrackId));
+-    EXPECT_TRUE(result.contains(audibleTrackId));
++    EXPECT_FALSE(result.count(mutedTrackId) != 0);
++    EXPECT_TRUE(result.count(audibleTrackId) != 0);
+ }
+ 
+ TEST(PlaybackControllerTests, SoloMakesNonSoloTracksInaudible)
+@@ -98,8 +101,8 @@ TEST(PlaybackControllerTests, SoloMakesNonSoloTracksInaudible)
+         makeTrackState(nonSoloTrackId)
+     });
+ 
+-    EXPECT_TRUE(result.contains(soloTrackId));
+-    EXPECT_FALSE(result.contains(nonSoloTrackId));
++    EXPECT_TRUE(result.count(soloTrackId) != 0);
++    EXPECT_FALSE(result.count(nonSoloTrackId) != 0);
+ }
+ 
+ TEST(PlaybackControllerTests, DisabledChordSymbolsTrackIsInaudible)
+@@ -114,9 +117,9 @@ TEST(PlaybackControllerTests, DisabledChordSymbolsTrackIsInaudible)
+     const InstrumentTrackIdSet disabledResult = audibleTrackIds(trackStates, false);
+     const InstrumentTrackIdSet enabledResult = audibleTrackIds(trackStates, true);
+ 
+-    EXPECT_FALSE(disabledResult.contains(chordSymbolsTrackId));
+-    EXPECT_TRUE(disabledResult.contains(notationTrackId));
+-    EXPECT_TRUE(enabledResult.contains(chordSymbolsTrackId));
++    EXPECT_FALSE(disabledResult.count(chordSymbolsTrackId) != 0);
++    EXPECT_TRUE(disabledResult.count(notationTrackId) != 0);
++    EXPECT_TRUE(enabledResult.count(chordSymbolsTrackId) != 0);
+ }
+ 
+ TEST(PlaybackControllerTests, RangePlaybackOnlyAllowsSelectedTracks)
+@@ -130,8 +133,8 @@ TEST(PlaybackControllerTests, RangePlaybackOnlyAllowsSelectedTracks)
+         makeTrackState(outsideRangeTrackId)
+     }, true, true, allowedInstrumentTrackIds);
+ 
+-    EXPECT_TRUE(result.contains(selectedTrackId));
+-    EXPECT_FALSE(result.contains(outsideRangeTrackId));
++    EXPECT_TRUE(result.count(selectedTrackId) != 0);
++    EXPECT_FALSE(result.count(outsideRangeTrackId) != 0);
+ }
+ 
+ TEST(PlaybackControllerTests, MetronomeIsExcludedAndDoesNotActivateSolo)
+@@ -144,8 +147,8 @@ TEST(PlaybackControllerTests, MetronomeIsExcludedAndDoesNotActivateSolo)
+         makeTrackState(metronomeTrackId, false, true, true, true)
+     });
+ 
+-    EXPECT_TRUE(result.contains(notationTrackId));
+-    EXPECT_FALSE(result.contains(metronomeTrackId));
++    EXPECT_TRUE(result.count(notationTrackId) != 0);
++    EXPECT_FALSE(result.count(metronomeTrackId) != 0);
+ }
+ 
+ TEST(PlaybackControllerTests, TrackWithoutPlaybackChannelIsInaudible)
+@@ -158,8 +161,8 @@ TEST(PlaybackControllerTests, TrackWithoutPlaybackChannelIsInaudible)
+         makeTrackState(unloadedTrackId, false, false, false)
+     });
+ 
+-    EXPECT_TRUE(result.contains(loadedTrackId));
+-    EXPECT_FALSE(result.contains(unloadedTrackId));
++    EXPECT_TRUE(result.count(loadedTrackId) != 0);
++    EXPECT_FALSE(result.count(unloadedTrackId) != 0);
+ }
+ 
+ TEST(PlaybackControllerTests, SoloTrackWithoutPlaybackChannelDoesNotMuteLoadedTracks)
+@@ -172,6 +175,63 @@ TEST(PlaybackControllerTests, SoloTrackWithoutPlaybackChannelDoesNotMuteLoadedTr
+         makeTrackState(unloadedSoloTrackId, false, true, false)
+     });
+ 
+-    EXPECT_TRUE(result.contains(loadedTrackId));
+-    EXPECT_FALSE(result.contains(unloadedSoloTrackId));
++    EXPECT_TRUE(result.count(loadedTrackId) != 0);
++    EXPECT_FALSE(result.count(unloadedSoloTrackId) != 0);
++}
 +
 +TEST(PlaybackControllerTests, RememberedInputSlotsFollowPartOrder)
 +{
@@ -43612,8 +44088,13 @@ index 42799407..eac27055 100644
 +    pick.resourceMeta.hasNativeEditorSupport = true;
 +    pick.resourceMeta.attributes.emplace(u"preset", u"17");
 +    pick.configuration.emplace("state", std::string("a\0b", 3));
++    const InstrumentTrackId metronomeId = makeTrackId(99);
++    const std::vector<muse::ID> orderedParts = { muse::ID(42), muse::ID(7) };
++    const QString slotName = QString::fromStdString(
++        detail::rememberedInputSlot(makeTrackId(7), metronomeId, false, orderedParts));
++    ASSERT_EQ(slotName, QString("position/2"));
 +    QJsonObject slotInputs;
-+    slotInputs.insert("position/2", mu::project::audioSettingsJson::inputParamsToJson(pick));
++    slotInputs.insert(slotName, mu::project::audioSettingsJson::inputParamsToJson(pick));
 +    const QByteArray json = QJsonDocument(slotInputs).toJson(QJsonDocument::Compact);
 +    const QJsonObject restoredSlots = QJsonDocument::fromJson(json).object();
 +    ASSERT_TRUE(restoredSlots.contains("position/2"));
@@ -43631,7 +44112,7 @@ index 42799407..eac27055 100644
 +    EXPECT_EQ(restored.configuration.at("state"), std::string("a\0b", 3));
 +    EXPECT_TRUE(restored == pick);
 +    EXPECT_FALSE(mu::project::audioSettingsJson::inputParamsFromJson(restoredSlots.value("position/3").toObject()).isValid());
-+}
+ }
 diff --git a/src/preferences/qml/MuseScore/Preferences/AudioMidiPreferencesPage.qml b/src/preferences/qml/MuseScore/Preferences/AudioMidiPreferencesPage.qml
 index aefdb619..aaea2e3f 100644
 --- a/src/preferences/qml/MuseScore/Preferences/AudioMidiPreferencesPage.qml
