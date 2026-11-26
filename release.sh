@@ -4,6 +4,7 @@
 # asc-api.p8, asc-api-key-id.txt and asc-api-issuer-id.txt (an App Store Connect API key, for notarization).
 # MSCORE_BUILD_ONLY=1 stops after the compile (the compile Mac); MSCORE_PACKAGE_ONLY=1 skips it; MSCORE_APP_FROM, naming
 # an rsync source such as host:path/mscore.app, packages the app built there and implies MSCORE_PACKAGE_ONLY.
+# MSCORE_CHECK_SCORE names a score of 2 pages or more: every gate and feature check opens it, the Navigator click included.
 set -e
 # a shell reads its script as it runs, so a pull or an edit mid-run would splice the run: run from a private copy
 if [ -z "${MSLITE_SCRIPT_HOME:-}" ]; then
@@ -167,6 +168,21 @@ DMG="applebuild/MuseScoreLite-${SHORT}.dmg"
 }
 xcrun stapler validate "applebuild/mscore.app"
 gates applebuild/mscore.app
+# every feature the owner uses, driven on the packaged app before anything is published, since packaging removes Qt
+# parts and the 4 gates above judge none of the features
+features() {
+  sh "${HERE}/pipeline-copy.sh" "$1" applebuild/test/mscore.app org.musescore.MuseScoreLite.test > /dev/null
+  TEST_BINARY="${PWD}/applebuild/test/mscore.app/Contents/MacOS/mscore"
+  shots=$(mktemp -d)
+  DRIVE_PANELS="Palettes,Layout,Properties,Selection filter,History,Navigator,Timeline,Mixer,Percussion" \
+    sh "${HERE}/tools/drive-play.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}" "${shots}/panels" 2
+  sh "${HERE}/tools/navigator-click.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}" "${shots}/click"
+  sh "${HERE}/tools/menu-title.sh" "${TEST_BINARY}" 3 "${MSCORE_CHECK_SCORE}"
+  (cd "${HERE}" && python3 -m tools.remember_probe "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}" && python3 -m tools.metronome_pick "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}")
+  sh "${HERE}/tools/isolation-check.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}"
+  rm -rf applebuild/test "${shots}"
+}
+features applebuild/mscore.app
 [ "${MSCORE_SKIP_PUBLISH:-}" = 1 ] && {
   echo "packaged ${SRC}/${DMG}"
   exit 0

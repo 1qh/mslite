@@ -733,10 +733,10 @@ index 1e2fb2df..43ddd632 100644
  };
  }
 diff --git a/src/appshell/internal/platform/macos/macosappmenumodelhook.mm b/src/appshell/internal/platform/macos/macosappmenumodelhook.mm
-index 1c39edb7..74aa7dd1 100644
+index 1c39edb7..e65e467a 100644
 --- a/src/appshell/internal/platform/macos/macosappmenumodelhook.mm
 +++ b/src/appshell/internal/platform/macos/macosappmenumodelhook.mm
-@@ -23,11 +23,183 @@
+@@ -23,11 +23,192 @@
  #include "macosappmenumodelhook.h"
  
  #include <Cocoa/Cocoa.h>
@@ -802,6 +802,15 @@ index 1c39edb7..74aa7dd1 100644
 +    }
 +
 +    NSMenuItem* appItem = [mainMenu itemAtIndex:0];
++    //! NOTE A new main menu or a replaced application item is drawn by AppKit with the app's own name even where the
++    //! item's title already equals the target, so a title is set again through an empty one whenever either changes
++    static const NSMenu* titledMenu = nil; // compared by identity only, never dereferenced
++    static const NSMenuItem* titledItem = nil;
++    if (titledMenu != mainMenu || titledItem != appItem) {
++        [appItem setTitle:@""];
++        titledMenu = mainMenu;
++        titledItem = appItem;
++    }
 +    if (![[appItem title] isEqualToString:title]) {
 +        [appItem setTitle:title];
 +    }
@@ -40072,7 +40081,7 @@ index 4aedde8e..acd5fa5d 100644
  
      muse::async::Channel<bool> m_muteHiddenInstrumentsChanged;
 diff --git a/src/playback/internal/playbackcontroller.cpp b/src/playback/internal/playbackcontroller.cpp
-index e8bc8f81..fa5d9645 100644
+index e8bc8f81..7e9cf001 100644
 --- a/src/playback/internal/playbackcontroller.cpp
 +++ b/src/playback/internal/playbackcontroller.cpp
 @@ -20,11 +20,11 @@
@@ -40322,7 +40331,20 @@ index e8bc8f81..fa5d9645 100644
      m_player = playback()->player(sequenceId);
      globalContext()->setCurrentPlayer(m_player);
  
-@@ -1424,14 +1341,7 @@ void PlaybackController::subscribeOnAudioParamsChanges()
+@@ -1393,6 +1310,12 @@ void PlaybackController::subscribeOnAudioParamsChanges()
+             return pair.second == trackId;
+         });
+ 
++        //! NOTE An invalid report is the engine falling back to silence for a sound it cannot find, never a pick: the score
++        //! keeps the pick it saved, so it plays again once the soundfont is back, and opening it marks nothing changed
++        if (!params.isValid()) {
++            return;
++        }
++
+         if (search != m_instrumentTrackIdMap.end()) {
+             const AudioResourceMeta& oldMeta = audioSettings()->trackInputParams(search->first).resourceMeta;
+             onAudioResourceChanged(trackId, search->first, oldMeta, params.resourceMeta);
+@@ -1424,14 +1347,7 @@ void PlaybackController::subscribeOnAudioParamsChanges()
  
          if (auxIt != m_auxTrackIdMap.end()) {
              aux_channel_idx_t auxIdx = auxIt->first;
@@ -40337,7 +40359,7 @@ index e8bc8f81..fa5d9645 100644
          }
      });
  }
-@@ -1469,7 +1379,7 @@ void PlaybackController::setupSequenceTracks()
+@@ -1469,7 +1385,7 @@ void PlaybackController::setupSequenceTracks()
      }
  
      for (aux_channel_idx_t idx = 0; idx < AUX_CHANNEL_NUM; ++idx) {
@@ -40346,7 +40368,7 @@ index e8bc8f81..fa5d9645 100644
      }
  
      m_loadingProgress.progress(0, trackCount, title);
-@@ -1823,9 +1733,7 @@ bool PlaybackController::canReceiveAction(const ActionCode& code) const
+@@ -1823,9 +1739,7 @@ bool PlaybackController::canReceiveAction(const ActionCode& code) const
          return false;
      }
  
@@ -40357,7 +40379,7 @@ index e8bc8f81..fa5d9645 100644
  
      static const std::unordered_set<ActionCode> REQUIRES_MEASURES {
          PLAY_CODE,
-@@ -1846,21 +1754,6 @@ bool PlaybackController::canReceiveAction(const ActionCode& code) const
+@@ -1846,21 +1760,6 @@ bool PlaybackController::canReceiveAction(const ActionCode& code) const
      return true;
  }
  

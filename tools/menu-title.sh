@@ -3,6 +3,7 @@
 # read the menu bar's 2nd item every 2 s for 8 s after the window appears, and refuse any reading that is not the
 # score's file name without its extension.
 # usage: menu-title.sh <test copy's mscore binary> <launches per score> <score>...
+# MENU_TITLE_LOGS, when set, names a folder that keeps each launch's own output.
 set -eu
 [ "$#" -ge 3 ] || {
   echo "usage: menu-title.sh <test copy's mscore binary> <launches per score> <score>..." >&2
@@ -23,14 +24,18 @@ for score in "$@"; do
     launch=$((launch + 1))
     sh "${HERE}/tools/test-app.sh" "${BINARY}"
     fresh=$(mktemp -d)
-    HOME="${fresh}" TMPDIR="${fresh}" "${BINARY}" "${score}" < /dev/null > /dev/null 2>&1 &
+    log=/dev/null
+    [ -z "${MENU_TITLE_LOGS:-}" ] || log="${MENU_TITLE_LOGS}/${want}-${launch}.log"
+    HOME="${fresh}" TMPDIR="${fresh}" "${BINARY}" "${score}" < /dev/null > "${log}" 2>&1 &
     pid=$!
     now=$(date +%s)
     deadline=$((now + 60))
-    until swift "${HERE}/tools/windows.swift" "${pid}" | grep -q "onscreen=true"; do
+    # the window appears before the score has loaded, and until it has the title is rightly the app's own name, so the
+    # readings start once the score window carries the score's name
+    until swift "${HERE}/tools/windows.swift" "${pid}" | grep "onscreen=true" | grep -qF " ${want}"; do
       now=$(date +%s)
       [ "${now}" -le "${deadline}" ] || {
-        echo "${want} launch ${launch}: no window within 60 s"
+        echo "${want} launch ${launch}: no window showing the score within 60 s"
         wrong=$((wrong + 1))
         break
       }
