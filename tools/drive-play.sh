@@ -2,6 +2,10 @@
 # Stage the compiled app beside this Mac's Qt, open a score, press Space to play, and save a screenshot.
 # usage: drive-play.sh <score> <screenshot.png>
 set -e
+# every launch below gets its own temp folder, where MuseScore keeps the socket its instances find each other by, so it
+# can never reach a copy of the app the owner has open
+TMPDIR=$(mktemp -d)
+export TMPDIR
 SCORE=${1:?usage: drive-play.sh <score> <screenshot.png>}
 SHOT=${2:?usage: drive-play.sh <score> <screenshot.png>}
 HERE=$(cd "$(dirname "$0")/.." && pwd)

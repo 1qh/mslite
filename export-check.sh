@@ -3,6 +3,10 @@
 # module the lean build switches off fails only when the pipeline first asks for its format.
 # usage: export-check.sh <mscore binary> <score>
 set -e
+# every launch below gets its own temp folder, where MuseScore keeps the socket its instances find each other by, so it
+# can never reach a copy of the app the owner has open
+TMPDIR=$(mktemp -d)
+export TMPDIR
 BINARY=$1
 SCORE=$2
 OUT=$(mktemp -d)

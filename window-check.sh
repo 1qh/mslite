@@ -3,6 +3,10 @@
 # owns leaves the app running with no window, which no command-line check sees.
 # usage: window-check.sh <mscore binary> <score>
 set -e
+# every launch below gets its own temp folder, where MuseScore keeps the socket its instances find each other by, so it
+# can never reach a copy of the app the owner has open
+TMPDIR=$(mktemp -d)
+export TMPDIR
 BINARY=$1
 SCORE=$2
 LOGS="${HOME}/mslite/logs"

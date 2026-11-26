@@ -3,6 +3,10 @@
 # build never reaches the internet, and a hidden module's background request is invisible on screen.
 # usage: net-check.sh <mscore binary> <score> [seconds]
 set -e
+# every launch below gets its own temp folder, where MuseScore keeps the socket its instances find each other by, so it
+# can never reach a copy of the app the owner has open
+TMPDIR=$(mktemp -d)
+export TMPDIR
 BINARY=$1
 SCORE=$2
 SECONDS_TO_WATCH=${3:-45}
