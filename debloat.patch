@@ -85,6 +85,33 @@ index 5fa71b22..04d6a25c 100644
      "font_secondary_color": "#BDBDBD",
      "link_color": "#FFFFFF",
      "focus_color": "#75507b",
+diff --git a/src/appshell/internal/applicationuiactions.cpp b/src/appshell/internal/applicationuiactions.cpp
+index e62c60f5..2b11edfe 100644
+--- a/src/appshell/internal/applicationuiactions.cpp
++++ b/src/appshell/internal/applicationuiactions.cpp
+@@ -75,22 +75,6 @@ const UiActionList ApplicationUiActions::m_actions = {
+              mu::context::CTX_ANY,
+              TranslatableString("action", "About &MusicXML…")
+              ),
+-    UiAction("online-handbook",
+-             mu::context::UiCtxAny,
+-             mu::context::CTX_ANY,
+-             TranslatableString("action", "Online &handbook"),
+-             TranslatableString("action", "Open online handbook")
+-             ),
+-    UiAction("ask-help",
+-             mu::context::UiCtxAny,
+-             mu::context::CTX_ANY,
+-             TranslatableString("action", "As&k for help")
+-             ),
+-    UiAction("accessibility-statement",
+-             mu::context::UiCtxAny,
+-             mu::context::CTX_ANY,
+-             TranslatableString("action", "Accessibility &statement")
+-             ),
+     UiAction("revert-factory",
+              mu::context::UiCtxAny,
+              mu::context::CTX_ANY,
 diff --git a/src/appshell/internal/appshellconfiguration.cpp b/src/appshell/internal/appshellconfiguration.cpp
 index 6c1316eb..64644eaa 100644
 --- a/src/appshell/internal/appshellconfiguration.cpp
@@ -189,6 +216,49 @@ index fad6a767..d04b6fef 100644
          if (!configuration()->hasCompletedFirstLaunchSetup()) {
              interactive()->open(FIRST_LAUNCH_SETUP_URI);
              return;
+diff --git a/src/appshell/qml/MuseScore/AppShell/AboutDialog.qml b/src/appshell/qml/MuseScore/AppShell/AboutDialog.qml
+index 6d8efdf3..e756dbfa 100644
+--- a/src/appshell/qml/MuseScore/AppShell/AboutDialog.qml
++++ b/src/appshell/qml/MuseScore/AppShell/AboutDialog.qml
+@@ -109,37 +109,7 @@ StyledDialogView {
+ 
+             StyledTextLabel {
+                 Layout.fillWidth: true
+-                text: {
+-                    let museScoreUrl = aboutModel.museScoreUrl()
+-
+-                    //: %1 will be a link to the MuseScore website
+-                    let line1 = qsTrc("appshell/about", "Visit %1 for new versions and more information.")
+-                                .arg(`<a href="${museScoreUrl.url}">${museScoreUrl.displayName}</a>`)
+-
+-                    let line2 = qsTrc("appshell/about", "Get <a href=\"%1\">help</a> with the program or <a href=\"%2\">contribute</a> to its development.")
+-                                .arg(aboutModel.museScoreForumUrl().url)
+-                                .arg(aboutModel.museScoreContributionUrl().url)
+-
+-                    return line1 + "<br>" + line2
+-                }
+-                wrapMode: Text.WordWrap
+-                maximumLineCount: 3
+-            }
+-
+-            StyledTextLabel {
+-                Layout.fillWidth: true
+-
+-                text: qsTrc("appshell/about", "For privacy information, see our <a href=\"%1\">privacy policy</a>.")
+-                      .arg(aboutModel.museScorePrivacyPolicyUrl().url)
+-
+-                wrapMode: Text.WordWrap
+-                maximumLineCount: 3
+-            }
+-
+-            StyledTextLabel {
+-                Layout.fillWidth: true
+-                text: qsTrc("appshell/about", "Copyright © 1999-2026 MuseScore Limited and others.\nPublished under the <a href=\"%1\">GNU General Public License version 3</a>.")
+-                      .arg("https://www.gnu.org/licenses/gpl-3.0.html")
++                text: qsTrc("appshell/about", "Copyright © 1999-2026 MuseScore Limited and others.\nPublished under the GNU General Public License version 3.")
+                       .replace("\n", "<br>")
+ 
+                 wrapMode: Text.WordWrap
 diff --git a/src/appshell/qml/MuseScore/AppShell/AppWindow.qml b/src/appshell/qml/MuseScore/AppShell/AppWindow.qml
 index 517c04d7..ced4f0b9 100644
 --- a/src/appshell/qml/MuseScore/AppShell/AppWindow.qml
@@ -415,7 +485,7 @@ index 806fdc3f..66800d91 100644
              closable: false
  
 diff --git a/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp b/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp
-index 939c8162..bea9c419 100644
+index 939c8162..127ebae3 100644
 --- a/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp
 +++ b/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp
 @@ -73,16 +73,9 @@ void AppMenuModel::load()
@@ -436,7 +506,7 @@ index 939c8162..bea9c419 100644
      setItems(items);
  
      setupConnections();
-@@ -204,9 +197,7 @@ MenuItem* AppMenuModel::makeFileMenu()
+@@ -204,11 +197,8 @@ MenuItem* AppMenuModel::makeFileMenu()
          makeSeparator(),
          makeMenuItem("file-save"),
          makeMenuItem("file-save-as"),
@@ -444,9 +514,11 @@ index 939c8162..bea9c419 100644
          makeMenu(TranslatableString("appshell/menu/file", "Save o&ther"), makeSaveOtherSubItems()),
 -        makeMenu(TranslatableString("appshell/menu/file", "Pu&blish online"), makePublishOnlineSubItems()),
          makeSeparator(),
-         makeMenuItem("file-convert-to-score"),
+-        makeMenuItem("file-convert-to-score"),
          makeMenuItem("file-export"),
-@@ -449,35 +440,10 @@ MenuItemList AppMenuModel::makePluginsMenuSubitems()
+         makeSeparator(),
+         makeMenuItem("project-properties"),
+@@ -449,35 +439,10 @@ MenuItemList AppMenuModel::makePluginsMenuSubitems()
  
  MenuItem* AppMenuModel::makeHelpMenu(bool addDiagnosticsSubMenu)
  {
@@ -867,6 +939,22 @@ index 32155614..7328a5df 100644
      settings()->valueChanged(INVERT_SCORE_COLOR).onReceive(nullptr, [this](const Val&) {
          m_scoreInversionChanged.notify();
          m_foregroundChanged.notify();
+diff --git a/src/notationscene/internal/notationuiactions.cpp b/src/notationscene/internal/notationuiactions.cpp
+index 8cbf2553..5087d968 100644
+--- a/src/notationscene/internal/notationuiactions.cpp
++++ b/src/notationscene/internal/notationuiactions.cpp
+@@ -1640,11 +1640,6 @@ const UiActionList NotationUiActions::s_actions = {
+              TranslatableString("action", "Page: Bottom of last"),
+              TranslatableString("action", "Jump to bottom of last page")
+              ),
+-    UiAction("help",
+-             mu::context::UiCtxProjectOpened,
+-             mu::context::CTX_NOTATION_OPENED,
+-             TranslatableString("action", "Context sensitive help")
+-             ),
+     UiAction("repeat-sel",
+              mu::context::UiCtxProjectOpened,
+              mu::context::CTX_NOTATION_OPENED,
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/NotationView.qml b/src/notationscene/qml/MuseScore/NotationScene/NotationView.qml
 index 085b38bf..bebf0d21 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/NotationView.qml
@@ -977,6 +1065,22 @@ index f1bfd8f8..773c19a6 100644
      qreal m_scrollOffset = 0.0;
      qreal m_spacing = 0.0;
  
+diff --git a/src/playback/internal/playbackuiactions.cpp b/src/playback/internal/playbackuiactions.cpp
+index 83877b72..447aa856 100644
+--- a/src/playback/internal/playbackuiactions.cpp
++++ b/src/playback/internal/playbackuiactions.cpp
+@@ -202,11 +202,6 @@ const UiActionList PlaybackUiActions::s_diagnosticActions = {
+ };
+ 
+ const UiActionList PlaybackUiActions::s_onlineSoundsActions = {
+-    UiAction(CLEAR_ONLINE_SOUNDS_CACHE_CODE,
+-             mu::context::UiCtxAny,
+-             mu::context::CTX_ANY,
+-             TranslatableString("action", "Clear online sounds cache for this score")
+-             ),
+ };
+ 
+ PlaybackUiActions::PlaybackUiActions(std::shared_ptr<PlaybackController> controller, const muse::modularity::ContextPtr& iocCtx)
 diff --git a/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp b/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp
 index 81415642..76f1a913 100644
 --- a/src/playback/qml/MuseScore/Playback/inputresourceitem.cpp
@@ -1016,6 +1120,43 @@ index 81415642..76f1a913 100644
      AudioResourceType newResourceType = AudioResourceType::Undefined;
      AudioResourceId newResourceId;
      parseAudioResourceTypeAndId(menuItemId, newResourceType, newResourceId);
+diff --git a/src/playback/qml/MuseScore/Playback/outputresourceitem.cpp b/src/playback/qml/MuseScore/Playback/outputresourceitem.cpp
+index f890c30c..a58de103 100644
+--- a/src/playback/qml/MuseScore/Playback/outputresourceitem.cpp
++++ b/src/playback/qml/MuseScore/Playback/outputresourceitem.cpp
+@@ -19,7 +19,6 @@ static const QString& NO_FX_MENU_ITEM_ID()
+     return resultStr;
+ }
+ 
+-static const QString GET_MORE_EFFECTS("getMoreEffects");
+ 
+ OutputResourceItem::OutputResourceItem(QObject* parent, const audio::AudioFxParams& params)
+     : AbstractAudioResourceItem(parent),
+@@ -77,11 +76,6 @@ void OutputResourceItem::requestAvailableResources()
+                                     /*isFilterCategory*/ true);
+         }
+ 
+-        result << buildSeparator();
+-        QVariantMap getMore = buildExternalLinkMenuItem(GET_MORE_EFFECTS, muse::qtrc("playback", "Get more effects"));
+-        getMore["alwaysAppend"] = true; // Always add this to the end of our lists, ignoring filters
+-        result << getMore;
+-
+         emit availableResourceListResolved(result);
+     })
+     .onReject(this, [](const int errCode, const std::string& errText) {
+@@ -96,12 +90,6 @@ void OutputResourceItem::handleMenuItem(const QString& menuItemId)
+     if (menuItemId == NO_FX_MENU_ITEM_ID()) {
+         updateCurrentFxParams(AudioResourceMeta());
+         return;
+-    } else if (menuItemId == GET_MORE_EFFECTS) {
+-        const QString url = QString::fromStdString(globalConfiguration()->museHubWebUrl());
+-        const QString urlParams("plugins?utm_medium=Referral&utm_source=mss"
+-                                "&utm_campaign=MH_WW_REF_MSS_DESKTOP_ALL_261026_crosslink&utm_content=mixer_fx");
+-        interactive()->openUrl(url + urlParams);
+-        return;
+     }
+ 
+     const AudioResourceId& newSelectedResourceId = menuItemId.toStdString();
 diff --git a/src/preferences/qml/MuseScore/Preferences/AudioMidiPreferencesPage.qml b/src/preferences/qml/MuseScore/Preferences/AudioMidiPreferencesPage.qml
 index aefdb619..1acd1832 100644
 --- a/src/preferences/qml/MuseScore/Preferences/AudioMidiPreferencesPage.qml
@@ -1029,6 +1170,84 @@ index aefdb619..1acd1832 100644
  
              showErrorDialog: audioMidiModel.shouldShowOnlineSoundsProcessingError
              autoProcessOnlineSoundsInBackground: audioMidiModel.autoProcessOnlineSoundsInBackground
+diff --git a/src/preferences/qml/MuseScore/Preferences/GeneralPreferencesPage.qml b/src/preferences/qml/MuseScore/Preferences/GeneralPreferencesPage.qml
+index 75baa177..3aaf6d4e 100644
+--- a/src/preferences/qml/MuseScore/Preferences/GeneralPreferencesPage.qml
++++ b/src/preferences/qml/MuseScore/Preferences/GeneralPreferencesPage.qml
+@@ -36,37 +36,12 @@ PreferencesPage {
+ 
+     GeneralPreferencesModel {
+         id: preferencesModel
+-
+-        onReceivingUpdateForCurrentLanguage: function(current, total, status) {
+-            languagesSection.setUpdateProgress(current, total, status)
+-        }
+     }
+ 
+     Column {
+         width: parent.width
+         spacing: root.sectionsSpacing
+ 
+-        LanguagesSection {
+-            id: languagesSection
+-
+-            languages: preferencesModel.languages
+-            currentLanguageCode: preferencesModel.currentLanguageCode
+-            restartRequired: preferencesModel.restartRequired
+-
+-            navigation.section: root.navigationSection
+-            navigation.order: root.navigationOrderStart + 1
+-
+-            onLanguageSelected: function(languageCode) {
+-                preferencesModel.currentLanguageCode = languageCode
+-            }
+-
+-            onCheckForUpdateRequested: {
+-                preferencesModel.checkUpdateForCurrentLanguage()
+-            }
+-        }
+-
+-        SeparatorLine { }
+-
+         ProgramStartSection {
+             model: preferencesModel
+ 
+@@ -74,15 +49,6 @@ PreferencesPage {
+             navigation.order: root.navigationOrderStart + 2
+         }
+ 
+-        SeparatorLine { }
+-
+-        WelcomeDialogSection {
+-            model: preferencesModel
+-
+-            navigation.section: root.navigationSection
+-            navigation.order: root.navigationOrderStart + 3
+-        }
+-
+         /*
+          * TODO: https://github.com/musescore/MuseScore/issues/9807
+         KeyboardLayoutsSection {
+@@ -120,19 +86,5 @@ PreferencesPage {
+             }
+         }*/
+ 
+-        SeparatorLine { }
+-
+-        AutomaticUpdateSection {
+-            isAppUpdatable: preferencesModel.isAppUpdatable()
+-            needCheckForNewAppVersion: preferencesModel.needCheckForNewAppVersion
+-            museScorePrivacyPolicyUrl: preferencesModel.museScorePrivacyPolicyUrl()
+-
+-            navigation.section: root.navigationSection
+-            navigation.order: root.navigationOrderStart + 4
+-
+-            onNeedCheckForNewAppVersionChangeRequested: function(check) {
+-                preferencesModel.needCheckForNewAppVersion = check
+-            }
+-        }
+     }
+ }
 diff --git a/src/preferences/qml/MuseScore/Preferences/SaveAndPublishPreferencesPage.qml b/src/preferences/qml/MuseScore/Preferences/SaveAndPublishPreferencesPage.qml
 index 758d4937..e4c343b7 100644
 --- a/src/preferences/qml/MuseScore/Preferences/SaveAndPublishPreferencesPage.qml
@@ -1054,10 +1273,32 @@ index 758d4937..e4c343b7 100644
              alsoShareAudioCom: preferencesModel.alsoShareAudioCom
  
              navigation.section: root.navigationSection
+diff --git a/src/preferences/qml/MuseScore/Preferences/internal/PlaybackQualitySection.qml b/src/preferences/qml/MuseScore/Preferences/internal/PlaybackQualitySection.qml
+index 41af2729..378786a6 100644
+--- a/src/preferences/qml/MuseScore/Preferences/internal/PlaybackQualitySection.qml
++++ b/src/preferences/qml/MuseScore/Preferences/internal/PlaybackQualitySection.qml
+@@ -38,7 +38,7 @@ BaseSection {
+ 
+         width: parent.width
+ 
+-        text: qsTrc("preferences", "Use warmer instrument sound (MS Basic/SoundFont only)")
++        text: qsTrc("preferences", "Use warmer instrument sound (SoundFont only)")
+ 
+         navigation.name: "UseSoundFontLowPassFilterCheckBox"
+         navigation.panel: root.navigation
 diff --git a/src/preferences/qml/MuseScore/Preferences/preferencesmodel.cpp b/src/preferences/qml/MuseScore/Preferences/preferencesmodel.cpp
-index b0ad77d1..dd3ae427 100644
+index b0ad77d1..af7cd1a4 100644
 --- a/src/preferences/qml/MuseScore/Preferences/preferencesmodel.cpp
 +++ b/src/preferences/qml/MuseScore/Preferences/preferencesmodel.cpp
+@@ -163,7 +163,7 @@ void PreferencesModel::load(const QString& currentPageId)
+         makeItem("canvas", QT_TRANSLATE_NOOP("preferences", "Canvas"), IconCode::Code::NEW_FILE,
+                  "Preferences/CanvasPreferencesPage.qml"),
+ 
+-        makeItem("cloud", QT_TRANSLATE_NOOP("preferences", "Save & publish"), IconCode::Code::CLOUD_FILE,
++        makeItem("cloud", QT_TRANSLATE_NOOP("preferences", "Save"), IconCode::Code::SAVE,
+                  "Preferences/SaveAndPublishPreferencesPage.qml"),
+ 
+         makeItem("note-input", QT_TRANSLATE_NOOP("preferences", "Note input"), IconCode::Code::EDIT,
 @@ -175,14 +175,6 @@ void PreferencesModel::load(const QString& currentPageId)
          makeItem("audio-midi", QT_TRANSLATE_NOOP("preferences", "Audio & MIDI"), IconCode::Code::AUDIO,
                   "Preferences/AudioMidiPreferencesPage.qml"),
@@ -1137,6 +1378,52 @@ index 5e99a504..bc20c65f 100644
  }
  
  void ProjectConfiguration::setLastUsedSaveLocationType(SaveLocationType type)
+diff --git a/src/project/internal/projectuiactions.cpp b/src/project/internal/projectuiactions.cpp
+index 4d8e020f..54043f14 100644
+--- a/src/project/internal/projectuiactions.cpp
++++ b/src/project/internal/projectuiactions.cpp
+@@ -76,27 +76,6 @@ const UiActionList ProjectUiActions::m_actions = {
+              TranslatableString("action", "Save &selection…"),
+              TranslatableString("action", "Save selection")
+              ),
+-    UiAction("file-save-to-cloud",
+-             mu::context::UiCtxAny,
+-             mu::context::CTX_ANY,
+-             TranslatableString("action", "Save to clo&ud…"),
+-             TranslatableString("action", "Save to cloud"),
+-             IconCode::Code::CLOUD_FILE
+-             ),
+-    UiAction("file-publish",
+-             mu::context::UiCtxAny,
+-             mu::context::CTX_ANY,
+-             TranslatableString("action", "Publish to &MuseScore.com…"),
+-             TranslatableString("action", "Publish to MuseScore.com"),
+-             IconCode::Code::CLOUD_FILE
+-             ),
+-    UiAction("file-share-audio",
+-             mu::context::UiCtxAny,
+-             mu::context::CTX_ANY,
+-             TranslatableString("action", "Share on &Audio.com…"),
+-             TranslatableString("action", "Share on Audio.com"),
+-             IconCode::Code::SHARE_AUDIO
+-             ),
+     UiAction("file-export",
+              mu::context::UiCtxAny,
+              mu::context::CTX_ANY,
+@@ -104,13 +83,6 @@ const UiActionList ProjectUiActions::m_actions = {
+              TranslatableString("action", "Export"),
+              IconCode::Code::SHARE_FILE
+              ),
+-    UiAction("file-convert-to-score",
+-             mu::context::UiCtxAny,
+-             mu::context::CTX_ANY,
+-             TranslatableString("action", "Convert &file…"),
+-             TranslatableString("action", "Convert file"),
+-             IconCode::Code::IMPORT
+-             ),
+     UiAction("project-properties",
+              mu::context::UiCtxAny,
+              mu::context::CTX_ANY,
 diff --git a/src/project/qml/MuseScore/Project/ScoresPage.qml b/src/project/qml/MuseScore/Project/ScoresPage.qml
 index 9b8ec9c4..3376e4cc 100644
 --- a/src/project/qml/MuseScore/Project/ScoresPage.qml
