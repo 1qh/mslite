@@ -1,0 +1,13 @@
+# Unit tests that fail on the untouched upstream base too, built with the same Qt on the compile Mac: unit-tests.sh
+# accepts a failure of exactly these and refuses any other. Measured by building engraving_tests from the base the
+# patches apply to; revisit when the base moves (release.sh rebases onto the release branch head).
+MidiRendererBend_Tests.bendAndVibrato
+MidiRendererBend_Tests.bendGraceAfter2
+MidiRendererBend_Tests.bendReleaseTwice
+MidiRendererBend_Tests.combined
+MidiRendererBend_Tests.gracebend
+MidiRendererBend_Tests.simple
+MidiRendererBend_Tests.slides
+MidiRendererBend_Tests.slightbend
+MidiRendererBend_Tests.tied
+MidiRenderer_Tests.vibrato

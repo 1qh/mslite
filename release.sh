@@ -89,6 +89,12 @@ if [ "${MSCORE_PACKAGE_ONLY:-}" != 1 ]; then
     echo "modules on with their QML off: ${MISSING_QML}" >&2
     exit 1
   fi
+  # the patched modules' unit tests, in a build folder beside the tree with the same options, refuse any failure the
+  # untouched upstream base does not share
+  TESTS_OUT=$(sh "${HERE}/tools/unit-tests.sh" "${PWD}" "${PWD}-tests" "${QT}" "${DEPS}" 2>&1) || {
+    printf '%s\n' "${TESTS_OUT}" >&2
+    exit 1
+  }
 fi
 [ -x applebuild/mscore.app/Contents/MacOS/mscore ] || {
   echo "build produced no app" >&2

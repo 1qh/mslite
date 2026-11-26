@@ -20,6 +20,7 @@ LEAN=$(sed -n 's/^LEAN="\(.*\)"$/\1/p' "${HERE}/release.sh")
   echo "no LEAN options found in release.sh" >&2
   exit 1
 }
+KNOWN="${HERE}/upstream-failing-tests.txt"
 TARGETS=${UNIT_TEST_TARGETS:-playback_test notationscene_qml_tests engraving_tests project_test project_qml_tests}
 export CMAKE_PREFIX_PATH="${QT}" PATH="${QT}/bin:${PATH}"
 # LEAN is a list of options: xargs splits it into cmake's arguments
@@ -39,8 +40,15 @@ for target in ${TARGETS}; do
     elif (cd "$(dirname "${binary}")" && "${binary}" > "${OUT}.${target}.run.log" 2>&1 < /dev/null); then
       echo "${target}: $(grep -E '^\[  PASSED  \]' "${OUT}.${target}.run.log" | tail -1)"
     else
-      echo "${target}: FAILED: $(grep -E '^\[  FAILED  \]' "${OUT}.${target}.run.log" | head -5 | tr '\n' ' ')"
-      status=1
+      failed=$(grep -E '^\[  FAILED  \] [A-Za-z0-9_]+\.[A-Za-z0-9_]+$' "${OUT}.${target}.run.log" | awk '{print $NF}' | sort -u)
+      new=$(printf '%s\n' "${failed}" | grep -vxF -f "${KNOWN}" | grep . || true)
+      if [ -n "${failed}" ] && [ -z "${new}" ]; then
+        echo "${target}: $(grep -E '^\[  PASSED  \]' "${OUT}.${target}.run.log" | tail -1), and only the $(printf '%s\n' "${failed}" | wc -l | tr -d ' ') failures upstream shares"
+      else
+        echo "${target}: FAILED: ${new:-the binary exited non-zero with no failed test named}" | tr '\n' ' '
+        echo
+        status=1
+      fi
     fi
   else
     echo "${target}: does not build: $(grep -m3 ' error: ' "${OUT}.${target}.build.log" | tr '\n' ' ')"
