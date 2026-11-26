@@ -23,9 +23,13 @@ HOME="${FRESH}" TMPDIR="${FRESH}" "${BINARY}" "${SCORE}" < /dev/null > "${SHOTS}
 PID=$!
 # the score window sits at layer 0 and floating panels at layer 3
 onscreen() { swift "${HERE}/tools/windows.swift" "${PID}" | awk '$1 == "layer" && ($2 == 0 || $2 == 3) && $4 == "onscreen=true"'; }
-deadline=$(($(date +%s) + 60))
-until [ -n "$(onscreen)" ]; do
-  [ "$(date +%s)" -le "${deadline}" ] || {
+now=$(date +%s)
+deadline=$((now + 60))
+while :; do
+  shown=$(onscreen)
+  [ -z "${shown}" ] || break
+  now=$(date +%s)
+  [ "${now}" -le "${deadline}" ] || {
     echo "no window within 60 s" >&2
     kill "${PID}" 2> /dev/null || true
     exit 1
@@ -59,4 +63,6 @@ rm -rf "${FRESH}"
   echo "no on-screen window to capture" >&2
   exit 1
 }
+# a floating window that grew to its content and never shrank shows an empty band beside it
+"${HERE}/.venv/bin/python" "${HERE}/tools/panel_band.py" "${SHOTS}"/window-*.png < /dev/null > /dev/null || exit 1
 echo "ok (${count} windows captured in ${SHOTS}; quit status ${quit})"

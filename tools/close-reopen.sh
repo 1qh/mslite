@@ -21,7 +21,9 @@ now=$(date +%s)
 deadline=$((now + 60))
 while :; do
   window_count=$(windows "${PID}")
-  [ "${window_count}" -lt 1 ] || break
+  if [ "${window_count}" -ge 1 ]; then
+    break
+  fi
   now=$(date +%s)
   [ "${now}" -le "${deadline}" ] || {
     echo "no window within 60 s" >&2

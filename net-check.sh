@@ -9,7 +9,8 @@ set -e
 APP_HOME=$(mktemp -d)
 BINARY=$1
 SCORE=$2
-sh "$(dirname -- "$0")/tools/test-app.sh" "${BINARY}" "${SCORE}"
+script_dir=$(dirname -- "$0")
+sh "${script_dir}/tools/test-app.sh" "${BINARY}" "${SCORE}"
 SECONDS_TO_WATCH=${3:-45}
 FOUND=$(mktemp)
 HOME="${APP_HOME}" TMPDIR="${APP_HOME}" "${BINARY}" "${SCORE}" < /dev/null > /dev/null 2>&1 &
@@ -35,7 +36,8 @@ while :; do
   samples=$((samples + 1))
   sleep 1
 done
-sh "$(dirname "$0")/quit-app.sh" "${PID}"
+script_dir=$(dirname "$0")
+sh "${script_dir}/quit-app.sh" "${PID}"
 # a loaded machine makes each lsof call take seconds, and a window sampled a handful of times proves little
 if [ "${samples}" -lt "${MIN_SAMPLES}" ]; then
   echo "only ${samples} samples in $((4 * SECONDS_TO_WATCH)) s, fewer than ${MIN_SAMPLES}: the machine is too loaded to judge the network" >&2
@@ -49,4 +51,5 @@ if [ -s "${FOUND}" ]; then
   exit 1
 fi
 rm -f "${FOUND}"
-echo "ok (${samples} samples over $(($(date +%s) - start)) s, no internet socket)"
+now=$(date +%s)
+echo "ok (${samples} samples over $((now - start)) s, no internet socket)"
