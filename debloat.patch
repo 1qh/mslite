@@ -260,10 +260,18 @@ index 6d8efdf3..e756dbfa 100644
  
                  wrapMode: Text.WordWrap
 diff --git a/src/appshell/qml/MuseScore/AppShell/AppWindow.qml b/src/appshell/qml/MuseScore/AppShell/AppWindow.qml
-index 517c04d7..ced4f0b9 100644
+index 517c04d7..12d55dca 100644
 --- a/src/appshell/qml/MuseScore/AppShell/AppWindow.qml
 +++ b/src/appshell/qml/MuseScore/AppShell/AppWindow.qml
-@@ -47,6 +47,23 @@ ApplicationWindow {
+@@ -25,7 +25,6 @@ import QtQuick.Controls
+ 
+ import Muse.Ui
+ import Muse.Shortcuts
+-import Muse.Tours
+ import Muse.Toast
+ 
+ import MuseScore.AppShell
+@@ -47,6 +46,23 @@ ApplicationWindow {
  
      visible: false
  
@@ -287,6 +295,74 @@ index 517c04d7..ced4f0b9 100644
      color: ui.theme.backgroundPrimaryColor
  
      Component.onCompleted: {
+@@ -73,7 +89,6 @@ ApplicationWindow {
+ 
+     ToolTipProvider { }
+ 
+-    ToursProvider { }
+ 
+     //! NOTE Need only create
+     Shortcuts { }
+diff --git a/src/appshell/qml/MuseScore/AppShell/CMakeLists.txt b/src/appshell/qml/MuseScore/AppShell/CMakeLists.txt
+index 84f19f06..c1f8afb9 100644
+--- a/src/appshell/qml/MuseScore/AppShell/CMakeLists.txt
++++ b/src/appshell/qml/MuseScore/AppShell/CMakeLists.txt
+@@ -52,26 +52,11 @@ qt_add_qml_module(appshell_qml
+         AboutDialog.qml
+         AboutMusicXMLDialog.qml
+         AppWindow.qml
+-        DevTools/CorruptScore/CorruptScoreDevTools.qml
+-        DevTools/CrashHandler/CrashHandlerDevTools.qml
+-        DevTools/DevToolsMenu.qml
+-        DevTools/DevToolsPage.qml
+-        DevTools/Extensions/ExtensionsListView.qml
+-        DevTools/Gallery/GeneralComponentsGallery.qml
+-        DevTools/Interactive/InteractiveTests.qml
+-        DevTools/KeyNav/KeyNavExample.qml
+-        DevTools/KeyNav/KeyNavSection.qml
+-        DevTools/KeyNav/KeyNavSubSection.qml
+-        DevTools/MPE/ArticulationsProfileEditorView.qml
+-        DevTools/Settings/SettingsPage.qml
+         FirstLaunchSetup/FirstLaunchSetupDialog.qml
+         FirstLaunchSetup/Page.qml
+         FirstLaunchSetup/PlaybackPage.qml
+         FirstLaunchSetup/ThemesPage.qml
+         FirstLaunchSetup/TutorialsPage.qml
+-        HomePage/HomeMenu.qml
+-        HomePage/HomePage.qml
+-        HomePage/PluginsPage.qml
+         MainToolBar.qml
+         NotationPage/NotationPage.qml
+         NotationPage/NotationStatusBar.qml
+@@ -80,8 +65,6 @@ qt_add_qml_module(appshell_qml
+         platform/AppButtonBackground.qml
+         platform/AppMenuBar.qml
+         platform/PlatformMenuBar.qml
+-        PublishPage/PublishPage.qml
+-        PublishPage/PublishToolBar.qml
+         WelcomeDialog.qml
+         WindowContent.qml
+     RESOURCES
+@@ -91,19 +74,15 @@ qt_add_qml_module(appshell_qml
+     IMPORTS
+         TARGET muse_ui_qml
+         TARGET muse_uicomponents_qml
+-        TARGET muse_cloud_qml
+         TARGET muse_dockwindow_qml
+         TARGET muse_diagnostics_qml
+         TARGET muse_extensions_qml
+-        TARGET muse_learn_qml
+         TARGET muse_mpe_qml
+         TARGET muse_shortcuts_qml
+         TARGET muse_toast_qml
+-        TARGET muse_tours_qml
+         TARGET engraving_qml
+         TARGET inspector_qml
+         TARGET instrumentsscene_qml
+-        TARGET musesounds_qml
+         TARGET notationscene_qml
+         TARGET palette_qml
+         TARGET playback_qml
 diff --git a/src/appshell/qml/MuseScore/AppShell/HomePage/HomeMenu.qml b/src/appshell/qml/MuseScore/AppShell/HomePage/HomeMenu.qml
 index 32d743d8..3e50fe85 100644
 --- a/src/appshell/qml/MuseScore/AppShell/HomePage/HomeMenu.qml
@@ -471,7 +547,7 @@ index 4b893445..9f825047 100644
              Layout.alignment: Qt.AlignVCenter
              Layout.preferredHeight: 28
 diff --git a/src/appshell/qml/MuseScore/AppShell/WindowContent.qml b/src/appshell/qml/MuseScore/AppShell/WindowContent.qml
-index 806fdc3f..66800d91 100644
+index 806fdc3f..1e3f1d8f 100644
 --- a/src/appshell/qml/MuseScore/AppShell/WindowContent.qml
 +++ b/src/appshell/qml/MuseScore/AppShell/WindowContent.qml
 @@ -67,6 +67,9 @@ DockWindow {
@@ -484,8 +560,32 @@ index 806fdc3f..66800d91 100644
              floatable: false
              closable: false
  
+@@ -97,22 +100,12 @@ DockWindow {
+     ]
+ 
+     pages: [
+-        HomePage {
+-            window: root.window
+-        },
+-
+         NotationPage {
+             topToolbarKeyNavSec: topToolbarKeyNavSec
+         },
+ 
+         NotationReviewPage {
+             topToolbarKeyNavSec: topToolbarKeyNavSec
+-        },
+-
+-        PublishPage {
+-            topToolbarKeyNavSec: topToolbarKeyNavSec
+-        },
+-
+-        DevToolsPage {}
++        }
+     ]
+ }
 diff --git a/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp b/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp
-index 939c8162..127ebae3 100644
+index 939c8162..6f25972a 100644
 --- a/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp
 +++ b/src/appshell/qml/MuseScore/AppShell/appmenumodel.cpp
 @@ -73,16 +73,9 @@ void AppMenuModel::load()
@@ -518,7 +618,15 @@ index 939c8162..127ebae3 100644
          makeMenuItem("file-export"),
          makeSeparator(),
          makeMenuItem("project-properties"),
-@@ -449,35 +439,10 @@ MenuItemList AppMenuModel::makePluginsMenuSubitems()
+@@ -304,7 +294,6 @@ MenuItem* AppMenuModel::makeViewMenu()
+         makeMenuItem("toggle-selection-filter"),
+         historyItem,
+         makeMenuItem("toggle-navigator"),
+-        makeMenuItem("toggle-braille-panel"),
+         makeMenuItem("toggle-timeline"),
+         makeMenuItem("toggle-mixer"),
+         makeMenuItem("toggle-piano-keyboard"),
+@@ -449,35 +438,10 @@ MenuItemList AppMenuModel::makePluginsMenuSubitems()
  
  MenuItem* AppMenuModel::makeHelpMenu(bool addDiagnosticsSubMenu)
  {
@@ -955,11 +1063,40 @@ index 8cbf2553..5087d968 100644
      UiAction("repeat-sel",
               mu::context::UiCtxProjectOpened,
               mu::context::CTX_NOTATION_OPENED,
+diff --git a/src/notationscene/qml/MuseScore/NotationScene/CMakeLists.txt b/src/notationscene/qml/MuseScore/NotationScene/CMakeLists.txt
+index 7e18b97a..f6f0e8b2 100644
+--- a/src/notationscene/qml/MuseScore/NotationScene/CMakeLists.txt
++++ b/src/notationscene/qml/MuseScore/NotationScene/CMakeLists.txt
+@@ -22,7 +22,6 @@ muse_create_qml_module(notationscene_qml FOR notationscene)
+ 
+ if (MUE_BUILD_BRAILLE_QML)
+     set(MAYBE_BRAILLE_QML
+-        TARGET braille_qml
+     )
+ else()
+     set(MAYBE_BRAILLE_QML)
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/NotationView.qml b/src/notationscene/qml/MuseScore/NotationScene/NotationView.qml
-index 085b38bf..bebf0d21 100644
+index 085b38bf..fd9336cc 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/NotationView.qml
 +++ b/src/notationscene/qml/MuseScore/NotationScene/NotationView.qml
-@@ -80,6 +80,9 @@ FocusScope {
+@@ -29,7 +29,6 @@ import QtQuick.Controls
+ import Muse.Ui
+ import Muse.UiComponents
+ import MuseScore.NotationScene
+-import MuseScore.Braille
+ import MuseScore.Playback
+ 
+ import "internal"
+@@ -44,7 +43,7 @@ FocusScope {
+     property alias paintView: notationView
+ 
+     property alias isNavigatorVisible: notationNavigator.visible
+-    property alias isBraillePanelVisible: brailleViewLoader.active
++    property bool isBraillePanelVisible: false
+     property alias isMainView: notationView.isMainView
+ 
+     property alias defaultNavigationControl: fakeNavCtrl
+@@ -80,6 +79,9 @@ FocusScope {
              id: tabPanel
              Layout.fillWidth: true
  
@@ -969,6 +1106,47 @@ index 085b38bf..bebf0d21 100644
              navigationPanel.section: navSec
              navigationPanel.order: 1
          }
+@@ -264,31 +266,6 @@ FocusScope {
+                 }
+             }
+ 
+-            Loader {
+-                id: brailleViewLoader
+-
+-                readonly property int navigationOrder: popUpLoader.navigationOrderEnd + 1
+-
+-                active: false
+-                visible: active
+-
+-                SplitView.fillWidth: true
+-                SplitView.preferredHeight: 50
+-                SplitView.minimumHeight: 30
+-
+-                sourceComponent: BrailleView {
+-                    navigationPanel.section: navSec
+-                    navigationPanel.order: brailleViewLoader.navigationOrder
+-
+-                    navigationPanel.onActiveChanged: function (active) {
+-                        if (active) {
+-                            notationView.navigationPanel.setActive(false);
+-                            fakeNavCtrl.setActive(false);
+-                        }
+-                    }
+-                }
+-            }
+-
+             Component {
+                 id: navigatorComp
+ 
+@@ -343,7 +320,7 @@ FocusScope {
+             Layout.fillWidth: true
+ 
+             navigationPanel.section: navSec
+-            navigationOrderStart: brailleViewLoader.navigationOrder + 1
++            navigationOrderStart: popUpLoader.navigationOrderEnd + 1
+ 
+             onClosed: {
+                 fakeNavCtrl.requestActive()
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/PianoKeyboardPanel.qml b/src/notationscene/qml/MuseScore/NotationScene/PianoKeyboardPanel.qml
 index 54eeb3b4..884047e0 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/PianoKeyboardPanel.qml
@@ -1424,6 +1602,46 @@ index 4d8e020f..54043f14 100644
      UiAction("project-properties",
               mu::context::UiCtxAny,
               mu::context::CTX_ANY,
+diff --git a/src/project/projectmodule.cpp b/src/project/projectmodule.cpp
+index 943cbecf..ba7eedac 100644
+--- a/src/project/projectmodule.cpp
++++ b/src/project/projectmodule.cpp
+@@ -114,12 +114,10 @@ void ProjectModule::resolveImports()
+     if (ir) {
+         ir->registerQmlUri(Uri("musescore://project/newscore"), "MuseScore.Project", "NewScoreDialog");
+         ir->registerQmlUri(Uri("musescore://project/asksavelocationtype"), "MuseScore.Project", "AskSaveLocationTypeDialog");
+-        ir->registerQmlUri(Uri("musescore://project/savetocloud"), "MuseScore.Project", "SaveToCloudDialog");
+         ir->registerQmlUri(Uri("musescore://project/alsoshareaudiocom"), "MuseScore.Project", "AlsoShareAudioComDialog");
+         ir->registerQmlUri(Uri("musescore://project/export"), "MuseScore.Project", "ExportDialog");
+         ir->registerQmlUri(Uri("musescore://project/migration"), "MuseScore.Project", "MigrationDialog");
+         ir->registerQmlUri(Uri("musescore://project/properties"), "MuseScore.Project", "ProjectPropertiesDialog");
+-        ir->registerQmlUri(Uri("musescore://project/convert/selectfiles"), "MuseScore.Project", "ConvertFileToScoreDialog");
+         ir->registerQmlUri(Uri("musescore://project/convert/processing"), "MuseScore.Project", "ConvertFileProcessingDialog");
+         ir->registerQmlUri(Uri("musescore://project/upload/progress"), "MuseScore.Project", "UploadProgressDialog");
+         ir->registerQmlUri(Uri("musescore://project/upload/success"), "MuseScore.Project", "ProjectUploadedDialog");
+diff --git a/src/project/qml/MuseScore/Project/CMakeLists.txt b/src/project/qml/MuseScore/Project/CMakeLists.txt
+index 38149fc7..7a80c086 100644
+--- a/src/project/qml/MuseScore/Project/CMakeLists.txt
++++ b/src/project/qml/MuseScore/Project/CMakeLists.txt
+@@ -67,7 +67,6 @@ qt_add_qml_module(project_qml
+         AudioGenerationSettingsDialog.qml
+         ExportDialog.qml
+         ConvertFileProcessingDialog.qml
+-        ConvertFileToScoreDialog.qml
+         DeleteCloudScoreDialog.qml
+         ReviewScoreQualityPanel.qml
+         internal/ConvertFileToScore/SelectFilePage.qml
+@@ -138,10 +137,8 @@ qt_add_qml_module(project_qml
+         NewScoreDialog.qml
+         ProjectPropertiesDialog.qml
+         ProjectUploadedDialog.qml
+-        SaveToCloudDialog.qml
+         ScoresGridView.qml
+         ScoresListView.qml
+-        ScoresPage.qml
+         ScoresView.qml
+         UploadProgressDialog.qml
+     RESOURCES
 diff --git a/src/project/qml/MuseScore/Project/ScoresPage.qml b/src/project/qml/MuseScore/Project/ScoresPage.qml
 index 9b8ec9c4..3376e4cc 100644
 --- a/src/project/qml/MuseScore/Project/ScoresPage.qml
