@@ -100,6 +100,10 @@ def main() -> int:
         sys.stderr.write("usage: metronome-pick.py <mscore binary> <score>\n")
         return 2
     binary, score = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+    guard = subprocess.run([shutil.which("sh") or "sh", str(HERE / "tools" / "test-app.sh"), str(binary)],
+                           stdin=subprocess.DEVNULL, check=False)
+    if guard.returncode:
+        return guard.returncode
     pick = f"mslite-probe-{uuid.uuid4().hex}"
     work = pathlib.Path(tempfile.mkdtemp())
     try:

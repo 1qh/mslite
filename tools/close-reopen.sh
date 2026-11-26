@@ -15,6 +15,7 @@ export TMPDIR
 APP=$1
 SCORE=$2
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+sh "${HERE}/tools/test-app.sh" "${APP}/Contents/MacOS/mscore"
 FRESH=$(mktemp -d)
 windows() { swift "${HERE}/tools/windows.swift" "$1" | awk '$1 == "layer" && $2 == 0 && $4 == "onscreen=true"' | grep -c . || true; }
 HOME="${FRESH}" "${APP}/Contents/MacOS/mscore" "${SCORE}" < /dev/null > /dev/null 2>&1 &

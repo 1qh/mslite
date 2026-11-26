@@ -118,9 +118,17 @@ done
 codesign --force --sign - "${BINARY}" 2> /dev/null
 
 : "${MSCORE_CHECK_SCORE:?set MSCORE_CHECK_SCORE to a score the built app opens for the window check}"
-sh "${HERE}/window-check.sh" "${BINARY}" "${MSCORE_CHECK_SCORE}"
-sh "${HERE}/net-check.sh" "${BINARY}" "${MSCORE_CHECK_SCORE}"
-sh "${HERE}/export-check.sh" "${BINARY}" "${MSCORE_CHECK_SCORE}"
+# every gate runs a copy under the test bundle identifier, whose settings are its own, never the owner's
+gates() {
+  sh "${HERE}/pipeline-copy.sh" "$1" applebuild/test/mscore.app org.musescore.MuseScoreLite.test > /dev/null
+  TEST_BINARY="${PWD}/applebuild/test/mscore.app/Contents/MacOS/mscore"
+  sh "${HERE}/window-check.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}"
+  sh "${HERE}/net-check.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}"
+  sh "${HERE}/export-check.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}"
+  sh "${HERE}/tools/fresh-launch.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}"
+  rm -rf applebuild/test
+}
+gates applebuild/mscore.app
 
 KEY_ID=$(cat "${MSCORE_SECRETS}/asc-api-key-id.txt")
 ISSUER=$(cat "${MSCORE_SECRETS}/asc-api-issuer-id.txt")
@@ -133,9 +141,7 @@ DMG="applebuild/MuseScoreLite-${SHORT}.dmg"
   exit 1
 }
 xcrun stapler validate "applebuild/mscore.app"
-sh "${HERE}/window-check.sh" "${PWD}/applebuild/mscore.app/Contents/MacOS/mscore" "${MSCORE_CHECK_SCORE}"
-sh "${HERE}/net-check.sh" "${PWD}/applebuild/mscore.app/Contents/MacOS/mscore" "${MSCORE_CHECK_SCORE}"
-sh "${HERE}/export-check.sh" "${PWD}/applebuild/mscore.app/Contents/MacOS/mscore" "${MSCORE_CHECK_SCORE}"
+gates applebuild/mscore.app
 [ "${MSCORE_SKIP_PUBLISH:-}" = 1 ] && {
   echo "packaged ${SRC}/${DMG}"
   exit 0

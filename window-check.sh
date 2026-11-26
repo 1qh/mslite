@@ -7,8 +7,12 @@ set -e
 # can never reach a copy of the app the owner has open
 TMPDIR=$(mktemp -d)
 export TMPDIR
+# and an empty home, so its data folder (~/mslite) starts empty and the owner's is never read
+HOME=$(mktemp -d)
+export HOME
 BINARY=$1
 SCORE=$2
+sh "$(dirname -- "$0")/tools/test-app.sh" "${BINARY}"
 LOGS="${HOME}/mslite/logs"
 RUNNING=$(ps -axo comm=)
 case "

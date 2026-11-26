@@ -2,11 +2,11 @@
 # Copy an installed MuseScoreLite into a separate app under its own bundle identifier, for running as a server.
 # macOS sends a file opened from Finder, Launchpad or `open` to any running app with the same bundle identifier,
 # so servers run from the installed app take the owner's file and show no window; this copy never shares that id.
-# usage: pipeline-copy.sh <installed .app> <destination .app>
+# usage: pipeline-copy.sh <installed .app> <destination .app> [bundle identifier, the pipeline's by default]
 set -e
 FROM=${1:?usage: pipeline-copy.sh <installed .app> <destination .app>}
 TO=${2:?usage: pipeline-copy.sh <installed .app> <destination .app>}
-ID=org.musescore.MuseScoreLite.pipeline
+ID=${3:-org.musescore.MuseScoreLite.pipeline}
 rm -rf "${TO}.new"
 ditto "${FROM}" "${TO}.new"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${ID}" "${TO}.new/Contents/Info.plist"

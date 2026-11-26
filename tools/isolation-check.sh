@@ -12,6 +12,7 @@ set -eu
 BINARY=$1
 SCORE=$2
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+sh "${HERE}/tools/test-app.sh" "${BINARY}"
 LISTENER_HOME=$(mktemp -d)
 SHARED_HOME=$(mktemp -d)
 HOME="${LISTENER_HOME}" "${BINARY}" "${SCORE}" < /dev/null > /dev/null 2>&1 &

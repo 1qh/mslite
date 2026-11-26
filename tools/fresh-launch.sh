@@ -17,6 +17,7 @@ export TMPDIR
 BINARY=$1
 SCORE=$2
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+sh "${HERE}/tools/test-app.sh" "${BINARY}"
 FRESH=$(mktemp -d)
 HOME="${FRESH}" "${BINARY}" "${SCORE}" < /dev/null > /dev/null 2>&1 &
 PID=$!
