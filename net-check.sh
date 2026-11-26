@@ -17,11 +17,18 @@ SECONDS_TO_WATCH=${3:-45}
 FOUND=$(mktemp)
 "${BINARY}" "${SCORE}" < /dev/null > /dev/null 2>&1 &
 PID=$!
-deadline=$(($(date +%s) + SECONDS_TO_WATCH))
+# watch for at least SECONDS_TO_WATCH and at least 1 sample every 2 s of it; a loaded machine samples slower, so the
+# watch runs on until it has those samples, up to 4 times as long
+MIN_SAMPLES=$((SECONDS_TO_WATCH / 2))
+start=$(date +%s)
+deadline=$((start + SECONDS_TO_WATCH))
+cap=$((start + 4 * SECONDS_TO_WATCH))
 samples=0
 while :; do
   now=$(date +%s)
-  [ "${now}" -le "${deadline}" ] || break
+  if [ "${now}" -gt "${deadline}" ] && { [ "${samples}" -ge "${MIN_SAMPLES}" ] || [ "${now}" -gt "${cap}" ]; }; then
+    break
+  fi
   kill -0 "${PID}" 2> /dev/null || {
     echo "the app exited during the network check" >&2
     rm -f "${FOUND}"
@@ -33,9 +40,8 @@ while :; do
 done
 sh "$(dirname "$0")/quit-app.sh" "${PID}"
 # a loaded machine makes each lsof call take seconds, and a window sampled a handful of times proves little
-MIN_SAMPLES=$((SECONDS_TO_WATCH / 2))
 if [ "${samples}" -lt "${MIN_SAMPLES}" ]; then
-  echo "only ${samples} samples in ${SECONDS_TO_WATCH} s, fewer than ${MIN_SAMPLES}: the machine is too loaded to judge the network" >&2
+  echo "only ${samples} samples in $((4 * SECONDS_TO_WATCH)) s, fewer than ${MIN_SAMPLES}: the machine is too loaded to judge the network" >&2
   rm -f "${FOUND}"
   exit 1
 fi
@@ -46,4 +52,4 @@ if [ -s "${FOUND}" ]; then
   exit 1
 fi
 rm -f "${FOUND}"
-echo "ok (${samples} samples, no internet socket)"
+echo "ok (${samples} samples over $(($(date +%s) - start)) s, no internet socket)"
