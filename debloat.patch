@@ -35201,6 +35201,18 @@ index 88a09d93..17dead9e 100644
          internal/synthesizers/soundfontrepository.cpp
          internal/synthesizers/soundfontrepository.h
          internal/synthesizers/fluidsynth/soundmapping.h
+diff --git a/src/framework/audio/engine/iaudioengineconfiguration.h b/src/framework/audio/engine/iaudioengineconfiguration.h
+index 9342d0d6..5ef5e0f7 100644
+--- a/src/framework/audio/engine/iaudioengineconfiguration.h
++++ b/src/framework/audio/engine/iaudioengineconfiguration.h
+@@ -45,7 +45,6 @@ public:
+     virtual bool useSoundFontLowPassFilter() const = 0;
+     virtual async::Channel<bool> useSoundFontLowPassFilterChanged() const = 0;
+ 
+-    virtual AudioInputParams defaultAudioInputParams() const = 0;
+ 
+     virtual size_t desiredAudioThreadNumber() const = 0;
+     virtual size_t minTrackCountForMultithreading() const = 0;
 diff --git a/src/framework/audio/engine/internal/abstracteventsequencer.h b/src/framework/audio/engine/internal/abstracteventsequencer.h
 index e337f380..a6c931fa 100644
 --- a/src/framework/audio/engine/internal/abstracteventsequencer.h
@@ -35234,8 +35246,71 @@ index e337f380..a6c931fa 100644
  
          return result;
      }
+diff --git a/src/framework/audio/engine/internal/audioengineconfiguration.cpp b/src/framework/audio/engine/internal/audioengineconfiguration.cpp
+index feecc321..7db89564 100644
+--- a/src/framework/audio/engine/internal/audioengineconfiguration.cpp
++++ b/src/framework/audio/engine/internal/audioengineconfiguration.cpp
+@@ -32,18 +32,6 @@ using namespace muse::audio;
+ using namespace muse::audio::engine;
+ using namespace muse::audio::rpc;
+ 
+-static const AudioResourceId DEFAULT_SOUND_FONT_NAME = "MS Basic";
+-static const AudioResourceAttributes DEFAULT_AUDIO_RESOURCE_ATTRIBUTES = {
+-    { PLAYBACK_SETUP_DATA_ATTRIBUTE, muse::mpe::GENERIC_SETUP_DATA_STRING },
+-    { synth::SOUNDFONT_NAME_ATTRIBUTE, String::fromStdString(DEFAULT_SOUND_FONT_NAME) } };
+-
+-static const AudioResourceMeta DEFAULT_AUDIO_RESOURCE_META = {
+-    DEFAULT_SOUND_FONT_NAME,
+-    "Fluid",
+-    DEFAULT_AUDIO_RESOURCE_ATTRIBUTES,
+-    AudioResourceType::FluidSoundfont,
+-    false /*hasNativeEditor*/ };
+-
+ void AudioEngineConfiguration::setConfig(const AudioEngineConfig& conf)
+ {
+     ONLY_AUDIO_ENGINE_THREAD;
+@@ -101,14 +89,6 @@ async::Channel<bool> AudioEngineConfiguration::useSoundFontLowPassFilterChanged(
+     return m_useSoundFontLowPassFilterChanged;
+ }
+ 
+-AudioInputParams AudioEngineConfiguration::defaultAudioInputParams() const
+-{
+-    AudioInputParams result;
+-    result.resourceMeta = DEFAULT_AUDIO_RESOURCE_META;
+-
+-    return result;
+-}
+-
+ size_t AudioEngineConfiguration::desiredAudioThreadNumber() const
+ {
+     return 0;
+diff --git a/src/framework/audio/engine/internal/audioengineconfiguration.h b/src/framework/audio/engine/internal/audioengineconfiguration.h
+index 1c1010fb..7ae977a4 100644
+--- a/src/framework/audio/engine/internal/audioengineconfiguration.h
++++ b/src/framework/audio/engine/internal/audioengineconfiguration.h
+@@ -43,7 +43,6 @@ public:
+     bool useSoundFontLowPassFilter() const override;
+     async::Channel<bool> useSoundFontLowPassFilterChanged() const override;
+ 
+-    AudioInputParams defaultAudioInputParams() const override;
+ 
+     size_t desiredAudioThreadNumber() const override;
+     size_t minTrackCountForMultithreading() const override;
+diff --git a/src/framework/audio/engine/internal/enginecontroller.cpp b/src/framework/audio/engine/internal/enginecontroller.cpp
+index 9aa8edbf..3807b4cd 100644
+--- a/src/framework/audio/engine/internal/enginecontroller.cpp
++++ b/src/framework/audio/engine/internal/enginecontroller.cpp
+@@ -150,8 +150,6 @@ void EngineController::init(const OutputSpec& outputSpec, const AudioEngineConfi
+     // Setup audio engine
+     m_audioEngine->init(outputSpec, consts);
+ 
+-    m_synthResolver->init(m_configuration->defaultAudioInputParams(), outputSpec);
+-
+     m_playback->init();
+ 
+     m_transportEventsDispatcher->init();
 diff --git a/src/framework/audio/engine/internal/eventaudiosource.cpp b/src/framework/audio/engine/internal/eventaudiosource.cpp
-index c6a358ce..e2577086 100644
+index c6a358ce..6419e063 100644
 --- a/src/framework/audio/engine/internal/eventaudiosource.cpp
 +++ b/src/framework/audio/engine/internal/eventaudiosource.cpp
 @@ -23,6 +23,7 @@
@@ -35256,7 +35331,7 @@ index c6a358ce..e2577086 100644
      m_playbackData.offStream.onReceive(this, [onOffStreamReceived, trackId](const PlaybackEventsMap&,
                                                                              const DynamicLevelLayers&,
                                                                              bool) {
-@@ -175,15 +179,20 @@ void EventAudioSource::applyInputParams(const AudioInputParams& requiredParams)
+@@ -175,14 +179,16 @@ void EventAudioSource::applyInputParams(const AudioInputParams& requiredParams)
          m_playbackData = m_synth->playbackData();
      }
  
@@ -35267,23 +35342,20 @@ index c6a358ce..e2577086 100644
 -        IF_ASSERT_FAILED(m_synth) {
 -            LOGE() << "Default synth not found!";
 -            return;
+-        }
 +    ISynthesizerPtr resolvedSynth;
 +    if (requiredParams.isValid()) {
 +        resolvedSynth = synthResolver()->resolveSynth(m_trackId, requiredParams, m_outputSpec, m_playbackData.setupData);
-+        if (!resolvedSynth) {
-+            resolvedSynth = synthResolver()->resolveDefaultSynth(m_trackId);
-         }
-     }
++    }
 +    if (!resolvedSynth) {
 +        resolvedSynth = std::make_shared<SilentSynth>(iocContext());
 +    }
 +    m_synth = std::move(resolvedSynth);
 +    IF_ASSERT_FAILED(m_synth) {
 +        return;
-+    }
+     }
  
      m_synth->paramsChanged().onReceive(this, [this](const AudioInputParams& params) {
-         m_paramsChanges.send(params);
 diff --git a/src/framework/audio/engine/internal/synthesizers/silentsynth.cpp b/src/framework/audio/engine/internal/synthesizers/silentsynth.cpp
 new file mode 100644
 index 00000000..1af6a27b
@@ -35438,10 +35510,29 @@ index 00000000..97f6769c
 +};
 +}
 diff --git a/src/framework/audio/engine/internal/synthesizers/synthresolver.cpp b/src/framework/audio/engine/internal/synthesizers/synthresolver.cpp
-index 62762c3d..e835d7f3 100644
+index 62762c3d..b7b04439 100644
 --- a/src/framework/audio/engine/internal/synthesizers/synthresolver.cpp
 +++ b/src/framework/audio/engine/internal/synthesizers/synthresolver.cpp
-@@ -50,7 +50,9 @@ ISynthesizerPtr SynthResolver::resolveSynth(const TrackId trackId, const AudioIn
+@@ -30,18 +30,6 @@ using namespace muse::async;
+ using namespace muse::audio;
+ using namespace muse::audio::synth;
+ 
+-void SynthResolver::init(const AudioInputParams& defaultInputParams, const OutputSpec& defaultOutputSpec)
+-{
+-    ONLY_AUDIO_ENGINE_THREAD;
+-
+-    IF_ASSERT_FAILED(defaultInputParams.isValid() && defaultOutputSpec.isValid()) {
+-        return;
+-    }
+-
+-    m_defaultInputParams = defaultInputParams;
+-    m_defaultOutputSpec = defaultOutputSpec;
+-}
+-
+ ISynthesizerPtr SynthResolver::resolveSynth(const TrackId trackId, const AudioInputParams& params, const audio::OutputSpec& spec,
+                                             const PlaybackSetupData& setupData) const
+ {
+@@ -50,7 +38,9 @@ ISynthesizerPtr SynthResolver::resolveSynth(const TrackId trackId, const AudioIn
      TRACEFUNC;
  
      if (!params.isValid()) {
@@ -35452,6 +35543,70 @@ index 62762c3d..e835d7f3 100644
          return nullptr;
      }
  
+@@ -71,20 +61,6 @@ ISynthesizerPtr SynthResolver::resolveSynth(const TrackId trackId, const AudioIn
+     return resolver->resolveSynth(trackId, params, spec);
+ }
+ 
+-ISynthesizerPtr SynthResolver::resolveDefaultSynth(const TrackId trackId) const
+-{
+-    ONLY_AUDIO_ENGINE_THREAD;
+-
+-    return resolveSynth(trackId, m_defaultInputParams, m_defaultOutputSpec, {});
+-}
+-
+-AudioInputParams SynthResolver::resolveDefaultInputParams() const
+-{
+-    ONLY_AUDIO_ENGINE_THREAD;
+-
+-    return m_defaultInputParams;
+-}
+-
+ AudioResourceMetaList SynthResolver::resolveAvailableResources() const
+ {
+     ONLY_AUDIO_ENGINE_THREAD;
+diff --git a/src/framework/audio/engine/internal/synthesizers/synthresolver.h b/src/framework/audio/engine/internal/synthesizers/synthresolver.h
+index d67f6c43..0daa92ad 100644
+--- a/src/framework/audio/engine/internal/synthesizers/synthresolver.h
++++ b/src/framework/audio/engine/internal/synthesizers/synthresolver.h
+@@ -32,12 +32,9 @@ namespace muse::audio::synth {
+ class SynthResolver : public ISynthResolver
+ {
+ public:
+-    void init(const AudioInputParams& defaultInputParams, const audio::OutputSpec& defaultOutputSpec) override;
+ 
+     ISynthesizerPtr resolveSynth(const TrackId trackId, const AudioInputParams& params, const OutputSpec& spec,
+                                  const PlaybackSetupData& setupData) const override;
+-    ISynthesizerPtr resolveDefaultSynth(const TrackId trackId) const override;
+-    AudioInputParams resolveDefaultInputParams() const override;
+     AudioResourceMetaList resolveAvailableResources() const override;
+     SoundPresetList resolveAvailableSoundPresets(const AudioResourceMeta& resourceMeta) const override;
+ 
+@@ -52,8 +49,6 @@ private:
+     mutable std::mutex m_mutex;
+ 
+     std::map<AudioSourceType, IResolverPtr> m_resolvers;
+-    AudioInputParams m_defaultInputParams;
+-    OutputSpec m_defaultOutputSpec;
+ };
+ }
+ 
+diff --git a/src/framework/audio/engine/isynthresolver.h b/src/framework/audio/engine/isynthresolver.h
+index ea08be0a..c949f776 100644
+--- a/src/framework/audio/engine/isynthresolver.h
++++ b/src/framework/audio/engine/isynthresolver.h
+@@ -53,12 +53,9 @@ public:
+     };
+     using IResolverPtr = std::shared_ptr<IResolver>;
+ 
+-    virtual void init(const AudioInputParams& defaultInputParams, const audio::OutputSpec& defaultOutputSpec) = 0;
+ 
+     virtual ISynthesizerPtr resolveSynth(const TrackId trackId, const AudioInputParams& params, const OutputSpec& spec,
+                                          const PlaybackSetupData& setupData) const = 0;
+-    virtual ISynthesizerPtr resolveDefaultSynth(const TrackId trackId) const = 0;
+-    virtual AudioInputParams resolveDefaultInputParams() const = 0;
+     virtual AudioResourceMetaList resolveAvailableResources() const = 0;
+     virtual SoundPresetList resolveAvailableSoundPresets(const AudioResourceMeta& resourceMeta) const = 0;
+     virtual void registerResolver(const AudioSourceType type, IResolverPtr resolver) = 0;
 diff --git a/src/framework/audio/main/internal/audioconfiguration.cpp b/src/framework/audio/main/internal/audioconfiguration.cpp
 index babb868d..d2902942 100644
 --- a/src/framework/audio/main/internal/audioconfiguration.cpp
@@ -36119,6 +36274,65 @@ index 1ef9b21a..7c671189 100644
  
  if (NOT MUSE_MODULE_EXTENSIONS)
      add_subdirectory(extensions)
+diff --git a/src/framework/stubs/audio/synthresolverstub.cpp b/src/framework/stubs/audio/synthresolverstub.cpp
+index b496ea55..851fd9d1 100644
+--- a/src/framework/stubs/audio/synthresolverstub.cpp
++++ b/src/framework/stubs/audio/synthresolverstub.cpp
+@@ -26,28 +26,12 @@
+ using namespace muse::audio;
+ using namespace muse::audio::synth;
+ 
+-void SynthResolverStub::init(const AudioInputParams& defaultInputParams, const OutputSpec& defaultOutputSpec)
+-{
+-    m_defaultInputParams = defaultInputParams;
+-    m_defaultOutputSpec = defaultOutputSpec;
+-}
+-
+ ISynthesizerPtr SynthResolverStub::resolveSynth(const TrackId, const AudioInputParams& params, const audio::OutputSpec&,
+                                                 const PlaybackSetupData&) const
+ {
+     return std::make_shared<SynthesizerStub>(params);
+ }
+ 
+-ISynthesizerPtr SynthResolverStub::resolveDefaultSynth(const TrackId) const
+-{
+-    return std::make_shared<SynthesizerStub>(m_defaultInputParams);
+-}
+-
+-AudioInputParams SynthResolverStub::resolveDefaultInputParams() const
+-{
+-    return {};
+-}
+-
+ AudioResourceMetaList SynthResolverStub::resolveAvailableResources() const
+ {
+     return {};
+diff --git a/src/framework/stubs/audio/synthresolverstub.h b/src/framework/stubs/audio/synthresolverstub.h
+index 7d8ff00d..7e9265d8 100644
+--- a/src/framework/stubs/audio/synthresolverstub.h
++++ b/src/framework/stubs/audio/synthresolverstub.h
+@@ -28,12 +28,9 @@ namespace muse::audio::synth {
+ class SynthResolverStub : public ISynthResolver
+ {
+ public:
+-    void init(const AudioInputParams& defaultInputParams, const audio::OutputSpec& defaultOutputSpec) override;
+ 
+     ISynthesizerPtr resolveSynth(const TrackId trackId, const AudioInputParams& params, const audio::OutputSpec& outputSpec,
+                                  const PlaybackSetupData& setupData) const override;
+-    ISynthesizerPtr resolveDefaultSynth(const TrackId trackId) const override;
+-    AudioInputParams resolveDefaultInputParams() const override;
+     audio::AudioResourceMetaList resolveAvailableResources() const override;
+     SoundPresetList resolveAvailableSoundPresets(const AudioResourceMeta& resourceMeta) const override;
+     void registerResolver(const AudioSourceType type, IResolverPtr resolver) override;
+@@ -41,8 +38,6 @@ public:
+     void clearSources() override;
+ 
+ private:
+-    AudioInputParams m_defaultInputParams;
+-    OutputSpec m_defaultOutputSpec;
+ };
+ }
+ 
 diff --git a/src/framework/stubs/cloud/CMakeLists.txt b/src/framework/stubs/cloud/CMakeLists.txt
 deleted file mode 100644
 index afae9649..00000000

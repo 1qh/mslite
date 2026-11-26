@@ -179,14 +179,23 @@ def main() -> int:
                 sys.stdout.write(f"  {line[:200]}\n")
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    if not applied:
-        sys.stderr.write(f"the app never asked the audio engine for the score's metronome pick {pick}\n")
-        return 1
-    if control:
-        sys.stderr.write("a score without a pick still asked for one: the probe cannot tell them apart\n")
-        return 1
-    if not (picked_clean and plain_clean):
-        sys.stderr.write("the app held its quit with a dialog: opening the score marked it changed\n")
+    unpicked = {line.split("Not found: ", 1)[1].strip() for line in picked_log.splitlines() if "Not found: " in line}
+    unpicked.discard(pick)
+    failures = [
+        reason
+        for failed, reason in (
+            (not applied, f"the app never asked the audio engine for the score's metronome pick {pick}"),
+            (control, "a score without a pick still asked for one: the probe cannot tell them apart"),
+            (bool(unpicked), f"the app looked up sounds nobody picked: {', '.join(sorted(unpicked))}"),
+            (
+                not (picked_clean and plain_clean),
+                "the app held its quit with a dialog: opening the score marked it changed",
+            ),
+        )
+        if failed
+    ]
+    if failures:
+        sys.stderr.write("\n".join(failures) + "\n")
         return 1
     sys.stdout.write("ok (the score's metronome pick reached the audio engine; a score without one named none)\n")
     return 0
