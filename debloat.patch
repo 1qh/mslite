@@ -4995,7 +4995,7 @@ index 70be7729..d4f24462 100644
  import MuseScore.Project
  import MuseScore.MuseSounds
 diff --git a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
-index dd4b7cf8..d802f759 100644
+index dd4b7cf8..ca7a0bb0 100644
 --- a/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
 +++ b/src/appshell/qml/MuseScore/AppShell/NotationPage/NotationPage.qml
 @@ -117,11 +117,16 @@ DockPage {
@@ -5246,7 +5246,7 @@ index dd4b7cf8..d802f759 100644
                      }
                  }
              }
-@@ -458,39 +518,100 @@ DockPage {
+@@ -458,39 +518,99 @@ DockPage {
              minimumWidth: root.panelMinDimension
              maximumWidth: root.panelMaxDimension
  
@@ -5315,17 +5315,16 @@ index dd4b7cf8..d802f759 100644
 +                    anchors.fill: parent
 +                    objectName: 'MainNotationViewNavigator'
 +                    fitFullContent: true
++                    // root.notationView is the score's paint view itself, and may still be null when this panel loads
++                    readonly property rect sourceViewport: root.notationView ? root.notationView.viewport : Qt.rect(0, 0, 0, 0)
++                    onSourceViewportChanged: setCursorRect(sourceViewport)
 +                    Component.onCompleted: {
 +                        load()
-+                        setCursorRect(notationView.paintView.viewport)
++                        setCursorRect(sourceViewport)
 +                    }
 +                    onMoveNotationRequested: function(dx, dy) {
-+                        notationView.paintView.moveCanvas(dx, dy)
-+                    }
-+                    Connections {
-+                        target: notationView.paintView
-+                        function onViewportChanged() {
-+                            navigator.setCursorRect(notationView.paintView.viewport)
++                        if (root.notationView) {
++                            root.notationView.moveCanvas(dx, dy)
 +                        }
 +                    }
 +                }
@@ -5353,7 +5352,7 @@ index dd4b7cf8..d802f759 100644
  
              groupName: root.horizontalPanelsGroup
  
-@@ -511,18 +632,24 @@ DockPage {
+@@ -511,18 +631,24 @@ DockPage {
  
          DockPanel {
              id: drumsetPanel
@@ -5381,7 +5380,7 @@ index dd4b7cf8..d802f759 100644
              closable: false
  
              location: Location.Bottom
-@@ -537,16 +664,20 @@ DockPage {
+@@ -537,16 +663,20 @@ DockPage {
  
          DockPanel {
              id: percussionPanel
@@ -5405,7 +5404,7 @@ index dd4b7cf8..d802f759 100644
  
              groupName: root.horizontalPanelsGroup
  
-@@ -574,13 +705,17 @@ DockPage {
+@@ -574,13 +704,17 @@ DockPage {
                  }
  
                  onResizeRequested: function(newWidth, newHeight) {
@@ -5425,7 +5424,7 @@ index dd4b7cf8..d802f759 100644
                      }
                  }
              }
-@@ -591,7 +726,7 @@ DockPage {
+@@ -591,7 +725,7 @@ DockPage {
          id: notationView
          name: "MainNotationView"
  
@@ -5434,7 +5433,7 @@ index dd4b7cf8..d802f759 100644
          isBraillePanelVisible: root.pageModel.isBraillePanelVisible
          isMainView: true
  
-@@ -609,41 +744,12 @@ DockPage {
+@@ -609,41 +743,12 @@ DockPage {
      statusBar: DockStatusBar {
          objectName: root.pageModel.statusBarName()
  
@@ -6760,6 +6759,34 @@ index 771d2645..2cdbc207 100644
      Q_INVOKABLE QString timelinePanelName() const;
      Q_INVOKABLE QString drumsetPanelName() const;
      Q_INVOKABLE QString percussionPanelName() const;
+diff --git a/src/appshell/qml/MuseScore/AppShell/notationstatusbarmodel.cpp b/src/appshell/qml/MuseScore/AppShell/notationstatusbarmodel.cpp
+index 8c9064b9..fa0cf177 100644
+--- a/src/appshell/qml/MuseScore/AppShell/notationstatusbarmodel.cpp
++++ b/src/appshell/qml/MuseScore/AppShell/notationstatusbarmodel.cpp
+@@ -179,7 +179,10 @@ void NotationStatusBarModel::initAvailableViewModeList()
+ {
+     TRACEFUNC;
+ 
+-    qDeleteAll(m_availableViewModeList);
++    //! NOTE A view may still hold these items until it learns of the change, so each is deleted only after that
++    for (auto* item : std::as_const(m_availableViewModeList)) {
++        item->deleteLater();
++    }
+     m_availableViewModeList.clear();
+ 
+     DEFER {
+@@ -310,7 +313,10 @@ void NotationStatusBarModel::initAvailableZoomList()
+ {
+     TRACEFUNC;
+ 
+-    qDeleteAll(m_availableZoomList);
++    //! NOTE A view may still hold these items until it learns of the change, so each is deleted only after that
++    for (auto* item : std::as_const(m_availableZoomList)) {
++        item->deleteLater();
++    }
+     m_availableZoomList.clear();
+ 
+     DEFER {
 diff --git a/src/appshell/qml/MuseScore/AppShell/resources/OnlineSoundsPreview.gif b/src/appshell/qml/MuseScore/AppShell/resources/OnlineSoundsPreview.gif
 deleted file mode 100644
 index 05020908a5939c96ac2e21c9e2a97281c4ecf37c..0000000000000000000000000000000000000000
@@ -35565,7 +35592,7 @@ index 7bd4804a..eeedcf18 100644
      bool shouldWarnBeforeSavingDiagnosticFiles() const override;
      void setShouldWarnBeforeSavingDiagnosticFiles(bool val) override;
 diff --git a/src/framework/dockwindow/internal/dockbase.cpp b/src/framework/dockwindow/internal/dockbase.cpp
-index 87246785..744acbde 100644
+index 87246785..b40d64e1 100644
 --- a/src/framework/dockwindow/internal/dockbase.cpp
 +++ b/src/framework/dockwindow/internal/dockbase.cpp
 @@ -23,8 +23,10 @@
@@ -35704,7 +35731,37 @@ index 87246785..744acbde 100644
      QSize minSizeBackup = QSize(m_minimumWidth, m_minimumHeight);
      QSize maxSizeBackup = QSize(m_maximumWidth, m_maximumHeight);
  
-@@ -670,6 +755,7 @@ void DockBase::componentComplete()
+@@ -597,6 +682,29 @@ void DockBase::resize(int width, int height)
+     m_maximumHeight = maxSizeBackup.height();
+ 
+     applySizeConstraints();
++
++    //! NOTE A floating window grows downward and rightward from where it stands, so after the native window takes its
++    //! new size it is moved back inside the screen's visible area
++    QTimer::singleShot(0, this, [this]() {
++        keepFloatingWindowOnScreen();
++    });
++}
++
++void DockBase::keepFloatingWindowOnScreen()
++{
++    const auto* floatingWindow = m_dockWidget ? m_dockWidget->floatingWindow() : nullptr;
++    QWindow* window = floatingWindow ? floatingWindow->windowHandle() : nullptr;
++    const QScreen* screen = window ? window->screen() : nullptr;
++    if (!screen) {
++        return;
++    }
++    const QRect available = screen->availableGeometry();
++    const QRect frame = window->frameGeometry();
++    const int x = qBound(available.left(), frame.left(), qMax(available.left(), available.right() + 1 - frame.width()));
++    const int y = qBound(available.top(), frame.top(), qMax(available.top(), available.bottom() + 1 - frame.height()));
++    if (x != frame.left() || y != frame.top()) {
++        window->setFramePosition(QPoint(x, y));
++    }
+ }
+ 
+ muse::ui::INavigationSection* DockBase::navigationSection() const
+@@ -670,6 +778,7 @@ void DockBase::componentComplete()
      connect(this, &DockBase::maximumSizeChanged, this, &DockBase::applySizeConstraints);
  
      m_defaultVisibility = isVisible();
@@ -35713,7 +35770,7 @@ index 87246785..744acbde 100644
  
  void DockBase::applySizeConstraints()
 diff --git a/src/framework/dockwindow/internal/dockbase.h b/src/framework/dockwindow/internal/dockbase.h
-index f2a0a616..b6ba9ea6 100644
+index f2a0a616..70a6c381 100644
 --- a/src/framework/dockwindow/internal/dockbase.h
 +++ b/src/framework/dockwindow/internal/dockbase.h
 @@ -60,6 +60,7 @@ class DockBase : public QQuickItem, public Contextable
@@ -35732,7 +35789,15 @@ index f2a0a616..b6ba9ea6 100644
      bool closable() const;
      bool resizable() const;
      bool separatorsVisible() const;
-@@ -148,6 +150,7 @@ public slots:
+@@ -129,6 +131,7 @@ public:
+     Q_INVOKABLE void open();
+     Q_INVOKABLE void close();
+     Q_INVOKABLE void resize(int width, int height);
++    void keepFloatingWindowOnScreen();
+ 
+     ui::INavigationSection* navigationSection() const;
+     ui::NavigationSection* navigationSection_property() const;
+@@ -148,6 +151,7 @@ public slots:
      void setDropDestinations(const QVariantList& destinations);
  
      void setFloatable(bool floatable);
@@ -35740,7 +35805,7 @@ index f2a0a616..b6ba9ea6 100644
      void setClosable(bool closable);
      void setResizable(bool resizable);
      void setSeparatorsVisible(bool visible);
-@@ -171,6 +174,7 @@ signals:
+@@ -171,6 +175,7 @@ signals:
      void dropDestinationsChanged();
  
      void floatableChanged();
@@ -35748,7 +35813,7 @@ index f2a0a616..b6ba9ea6 100644
      void closableChanged();
      void resizableChanged();
      void separatorsVisibleChanged();
-@@ -210,6 +214,7 @@ private:
+@@ -210,6 +215,7 @@ private:
      void writeProperties();
  
      void setInited(bool inited);
@@ -35756,7 +35821,7 @@ index f2a0a616..b6ba9ea6 100644
  
      QString m_title;
  
-@@ -224,6 +229,9 @@ private:
+@@ -224,6 +230,9 @@ private:
      QVariantList m_dropDestinations;
  
      bool m_defaultVisibility = false;
@@ -36008,6 +36073,23 @@ index d0cf77b7..70e5965f 100644
  
      MOCK_METHOD(bool, highResolutionTimers, (), (const, override));
  };
+diff --git a/src/framework/mpe/qml/Muse/Mpe/articulationpatternitem.cpp b/src/framework/mpe/qml/Muse/Mpe/articulationpatternitem.cpp
+index 470e265a..6b4c4f8f 100644
+--- a/src/framework/mpe/qml/Muse/Mpe/articulationpatternitem.cpp
++++ b/src/framework/mpe/qml/Muse/Mpe/articulationpatternitem.cpp
+@@ -99,8 +99,11 @@ void ArticulationPatternItem::load(const ArticulationPattern& pattern)
+ {
+     beginResetModel();
+ 
++    //! NOTE A view may still hold these items until it learns of the change, so each is deleted only after that
++    for (auto* item : std::as_const(m_items)) {
++        item->deleteLater();
++    }
+     m_items.clear();
+-    qDeleteAll(m_items);
+ 
+     for (auto it = pattern.begin(); it != pattern.end(); ++it) {
+         auto next = std::next(it, 1);
 diff --git a/src/framework/network/internal/networkmanager.cpp b/src/framework/network/internal/networkmanager.cpp
 index 35b20ef2..368fed76 100644
 --- a/src/framework/network/internal/networkmanager.cpp
@@ -36563,6 +36645,22 @@ index 435a88e6..ae1feaf0 100644
          Layout.fillWidth: true
          Layout.leftMargin: 12 * root.expandableDepth
          height: childrenRect.height
+diff --git a/src/framework/uicomponents/qml/Muse/UiComponents/abstracttoolbarmodel.cpp b/src/framework/uicomponents/qml/Muse/UiComponents/abstracttoolbarmodel.cpp
+index 18e64b61..30ebb306 100644
+--- a/src/framework/uicomponents/qml/Muse/UiComponents/abstracttoolbarmodel.cpp
++++ b/src/framework/uicomponents/qml/Muse/UiComponents/abstracttoolbarmodel.cpp
+@@ -130,7 +130,10 @@ void AbstractToolBarModel::setItems(const ToolBarItemList& items)
+ 
+     beginResetModel();
+ 
+-    qDeleteAll(m_items);
++    //! NOTE A view may still hold these items until it learns of the change, so each is deleted only after that
++    for (auto* item : std::as_const(m_items)) {
++        item->deleteLater();
++    }
+     m_items.clear();
+ 
+     //! NOTE: make sure that we don't have two separators sequentially
 diff --git a/src/importexport/audioexport/internal/abstractaudiowriter.cpp b/src/importexport/audioexport/internal/abstractaudiowriter.cpp
 index adf9e1c1..ac3c9602 100644
 --- a/src/importexport/audioexport/internal/abstractaudiowriter.cpp
@@ -37432,7 +37530,7 @@ index e043f701..6dd681b8 100644
      spacing: 8
  
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.cpp b/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.cpp
-index 5a19030e..d1ed559c 100644
+index 5a19030e..a687970b 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.cpp
 +++ b/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.cpp
 @@ -21,6 +21,15 @@
@@ -37503,7 +37601,15 @@ index 5a19030e..d1ed559c 100644
      if (!isVisible() || size().isEmpty()) {
          return;
      }
-@@ -165,6 +195,9 @@ bool NotationNavigator::moveCanvasToRect(const RectF& viewRect)
+@@ -145,7 +175,6 @@ void NotationNavigator::mousePressEvent(QMouseEvent* event)
+ 
+     double dx = logicPos.x() - (m_cursorRect.x() + (m_cursorRect.width() / 2));
+     double dy = logicPos.y() - (m_cursorRect.y() + (m_cursorRect.height() / 2));
+-
+     emit moveNotationRequested(-dx, -dy);
+ }
+ 
+@@ -165,6 +194,9 @@ bool NotationNavigator::moveCanvasToRect(const RectF& viewRect)
      TRACEFUNC;
  
      RectF newViewRect = viewRect;
@@ -37513,7 +37619,17 @@ index 5a19030e..d1ed559c 100644
      RectF viewport = this->viewport();
      RectF notationContentRect = this->notationContentRect();
  
-@@ -236,8 +269,9 @@ int NotationNavigator::orientation() const
+@@ -214,6 +246,9 @@ void NotationNavigator::setCursorRect(const QRectF& rect)
+ 
+     TRACEFUNC;
+ 
++    //! NOTE The view's viewport arrives before the score is laid out, when the content is still empty, so it is kept
++    //! and intersected again on every refit
++    m_viewportRect = rect;
+     RectF newCursorRect = notationContentRect().intersected(RectF::fromQRectF(rect));
+ 
+     bool moved = moveCanvasToRect(newCursorRect);
+@@ -236,8 +271,9 @@ int NotationNavigator::orientation() const
  void NotationNavigator::initOrientation()
  {
      ValCh<muse::Orientation> orientation = configuration()->canvasOrientation();
@@ -37524,7 +37640,7 @@ index 5a19030e..d1ed559c 100644
          emit orientationChanged();
      });
  
-@@ -251,6 +285,36 @@ void NotationNavigator::initVisible()
+@@ -251,6 +287,36 @@ void NotationNavigator::initVisible()
      });
  }
  
@@ -37561,7 +37677,7 @@ index 5a19030e..d1ed559c 100644
  ViewMode NotationNavigator::notationViewMode() const
  {
      if (!notation()) {
-@@ -268,11 +332,61 @@ void NotationNavigator::paint(QPainter* painter)
+@@ -268,11 +334,61 @@ void NotationNavigator::paint(QPainter* painter)
  
      TRACEFUNC;
  
@@ -37617,7 +37733,7 @@ index 5a19030e..d1ed559c 100644
 +    matrix.scale(scaling, scaling);
 +    matrix.translate(-content.left(), -content.top());
 +    setMatrix(matrix);
-+    setCursorRect(m_cursorRect.toQRectF());
++    setCursorRect(m_viewportRect);
 +    update();
 +}
 +
@@ -37625,7 +37741,7 @@ index 5a19030e..d1ed559c 100644
  {
      rescaleIfVisible();
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.h b/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.h
-index 57f10029..d7e60e4b 100644
+index 57f10029..8f5ccb6b 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.h
 +++ b/src/notationscene/qml/MuseScore/NotationScene/notationnavigator.h
 @@ -22,6 +22,7 @@
@@ -37673,7 +37789,7 @@ index 57f10029..d7e60e4b 100644
      void onViewSizeChanged() override;
  
      void wheelEvent(QWheelEvent* event) override;
-@@ -104,6 +112,10 @@ private:
+@@ -104,7 +112,12 @@ private:
  
      const PageList& pages() const;
  
@@ -37682,8 +37798,10 @@ index 57f10029..d7e60e4b 100644
 +    QList<QMetaObject::Connection> m_windowConnections;
 +    QMetaObject::Connection m_screenConnection;
      muse::RectF m_cursorRect;
++    QRectF m_viewportRect;
      NotationNavigatorCursorView* m_cursorRectView = nullptr;
      muse::PointF m_startMove;
+ };
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/notationswitchlistmodel.cpp b/src/notationscene/qml/MuseScore/NotationScene/notationswitchlistmodel.cpp
 index a47bb869..74ace452 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/notationswitchlistmodel.cpp
@@ -43329,7 +43447,7 @@ index 34b18edc..529fe7fd 100644
      void emitMixerSectionVisibilityChanged(MixerSectionType sectionType);
  
 diff --git a/src/playback/qml/MuseScore/Playback/mixerpanelmodel.cpp b/src/playback/qml/MuseScore/Playback/mixerpanelmodel.cpp
-index 2d760d2c..6d4e820c 100644
+index 2d760d2c..10ee3cf9 100644
 --- a/src/playback/qml/MuseScore/Playback/mixerpanelmodel.cpp
 +++ b/src/playback/qml/MuseScore/Playback/mixerpanelmodel.cpp
 @@ -21,6 +21,7 @@
@@ -43381,7 +43499,18 @@ index 2d760d2c..6d4e820c 100644
      emit rowCountChanged();
  }
  
-@@ -271,17 +252,6 @@ void MixerPanelModel::clear()
+@@ -265,23 +246,16 @@ void MixerPanelModel::clear()
+     TRACEFUNC;
+ 
+     m_masterChannelItem = nullptr;
+-    qDeleteAll(m_mixerChannelList);
++    //! NOTE The view's delegates still hold these items until the model reset ends, so each is deleted only after
++    //! that, never inside the reset, where every binding on it would read null
++    for (MixerChannelItem* item : std::as_const(m_mixerChannelList)) {
++        item->deleteLater();
++    }
+     m_mixerChannelList.clear();
+ }
  
  void MixerPanelModel::setupConnections()
  {
@@ -43399,7 +43528,7 @@ index 2d760d2c..6d4e820c 100644
      playback()->inputParamsChanged().onReceive(
          this, [this](const TrackSequenceId sequenceId, const TrackId trackId, AudioInputParams params) {
          if (m_currentTrackSequenceId != sequenceId) {
-@@ -310,34 +280,6 @@ void MixerPanelModel::setupConnections()
+@@ -310,34 +284,6 @@ void MixerPanelModel::setupConnections()
              loadOutputParams(m_masterChannelItem, std::move(params));
          }
      }, Asyncable::Mode::SetReplace);
@@ -43434,7 +43563,7 @@ index 2d760d2c..6d4e820c 100644
  }
  
  int MixerPanelModel::resolveInsertIndex(const engraving::InstrumentTrackId& newInstrumentTrackId) const
-@@ -349,7 +291,6 @@ int MixerPanelModel::resolveInsertIndex(const engraving::InstrumentTrackId& newI
+@@ -349,7 +295,6 @@ int MixerPanelModel::resolveInsertIndex(const engraving::InstrumentTrackId& newI
  
      // Assumptions:
      // - the last channel is always the master channel
@@ -43442,7 +43571,7 @@ index 2d760d2c..6d4e820c 100644
      // - the InstrumentTrackIds from the mixer channel items are always a correctly
      //   sorted subset of the InstrumentTrackIds from NotationParts
      if (notationPlayback()->isChordSymbolsTrack(newInstrumentTrackId)) {
-@@ -429,6 +370,22 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
+@@ -429,6 +374,22 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
      item->setInstrumentTrackId(instrumentTrackId);
      item->setPanelSection(m_navigationSection);
      item->loadSoloMuteState(controller()->trackSoloMuteState(instrumentTrackId));
@@ -43465,7 +43594,7 @@ index 2d760d2c..6d4e820c 100644
  
      playback()->inputParams(m_currentTrackSequenceId, trackId)
      .onResolve(this, [this, trackId](AudioInputParams inParams) {
-@@ -441,17 +398,6 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
+@@ -441,17 +402,6 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
                 << ", " << text;
      });
  
@@ -43483,7 +43612,7 @@ index 2d760d2c..6d4e820c 100644
      playback()->outputParams(m_currentTrackSequenceId, trackId)
      .onResolve(this, [this, trackId](AudioOutputParams outParams) {
          if (MixerChannelItem* item = findChannelItem(trackId)) {
-@@ -463,18 +409,11 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
+@@ -463,18 +413,11 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
                 << ", " << text;
      });
  
@@ -43506,7 +43635,7 @@ index 2d760d2c..6d4e820c 100644
          playback()->setInputParams(m_currentTrackSequenceId, trackId, params);
      });
  
-@@ -482,13 +421,6 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
+@@ -482,13 +425,6 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
          playback()->setOutputParams(m_currentTrackSequenceId, trackId, params);
      });
  
@@ -43520,7 +43649,7 @@ index 2d760d2c..6d4e820c 100644
      connect(item, &MixerChannelItem::soloMuteStateChanged, this,
              [this, instrumentTrackId](const notation::INotationSoloMuteState::SoloMuteState& state) {
          controller()->setTrackSoloMuteState(instrumentTrackId, state);
-@@ -497,57 +429,6 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
+@@ -497,57 +433,6 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
      return item;
  }
  
@@ -43578,7 +43707,7 @@ index 2d760d2c..6d4e820c 100644
  MixerChannelItem* MixerPanelModel::buildMasterChannelItem()
  {
      MixerChannelItem* item = new MixerChannelItem(this, MixerChannelItem::Type::Master, true /*outputOnly*/);
-@@ -565,21 +446,14 @@ MixerChannelItem* MixerPanelModel::buildMasterChannelItem()
+@@ -565,21 +450,14 @@ MixerChannelItem* MixerPanelModel::buildMasterChannelItem()
                 << ", " << text;
      });
  
@@ -43604,7 +43733,7 @@ index 2d760d2c..6d4e820c 100644
      return item;
  }
  
-@@ -606,26 +480,6 @@ void MixerPanelModel::loadOutputParams(MixerChannelItem* item, AudioOutputParams
+@@ -606,26 +484,6 @@ void MixerPanelModel::loadOutputParams(MixerChannelItem* item, AudioOutputParams
      }
  
      item->loadOutputParams(std::move(params));
@@ -43631,7 +43760,7 @@ index 2d760d2c..6d4e820c 100644
  }
  
  INotationProjectPtr MixerPanelModel::currentProject() const
-@@ -633,11 +487,6 @@ INotationProjectPtr MixerPanelModel::currentProject() const
+@@ -633,11 +491,6 @@ INotationProjectPtr MixerPanelModel::currentProject() const
      return context()->currentProject();
  }
  

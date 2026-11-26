@@ -56,13 +56,27 @@ for id in $(onscreen | sed -n 's/.* id=\([0-9]*\).*/\1/p'); do
   screencapture -x -o -l "${id}" "${SHOTS}/window-${count}.png"
   sips -Z 1600 "${SHOTS}/window-${count}.png" --out "${SHOTS}/window-${count}.png" > /dev/null
 done
+# every window, floating panels above all, must lie inside the screen's visible area, where a capture of the window
+# alone cannot tell
+placed=0
+swift "${HERE}/tools/onscreen.swift" "${PID}" > "${SHOTS}/onscreen.txt" 2>&1 || placed=1
 quit=0
 sh "${HERE}/quit-app.sh" "${PID}" || quit=$?
 rm -rf "${FRESH}"
+[ "${placed}" -eq 0 ] || {
+  cat "${SHOTS}/onscreen.txt" >&2
+  exit 1
+}
 [ "${count}" -gt 0 ] || {
   echo "no on-screen window to capture" >&2
   exit 1
 }
 # a floating window that grew to its content and never shrank shows an empty band beside it
 "${HERE}/.venv/bin/python" "${HERE}/tools/panel_band.py" "${SHOTS}"/window-*.png < /dev/null > /dev/null || exit 1
+# a QML binding that names something absent logs a TypeError or ReferenceError and leaves its control dead
+if grep -E 'qrc:[^ ]+\.qml:[0-9]+.*(TypeError|ReferenceError|Unable to assign)' "${SHOTS}/app.log" > "${SHOTS}/qml-errors.txt"; then
+  echo "QML errors in the app's log:" >&2
+  sed 's/.*| //' "${SHOTS}/qml-errors.txt" | sort | uniq -c >&2
+  exit 1
+fi
 echo "ok (${count} windows captured in ${SHOTS}; quit status ${quit})"
