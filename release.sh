@@ -185,6 +185,7 @@ features() {
   sh "${HERE}/tools/menu-title.sh" "${TEST_BINARY}" 3 "${MSCORE_CHECK_SCORE}"
   (cd "${HERE}" && python3 -m tools.remember_probe "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}" && python3 -m tools.metronome_pick "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}")
   sh "${HERE}/tools/isolation-check.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}"
+  sh "${HERE}/tools/keyboard-check.sh" "${TEST_BINARY}" "${MSCORE_CHECK_SCORE}" "${shots}/keys"
   rm -rf applebuild/test "${shots}"
 }
 features applebuild/mscore.app
