@@ -19,7 +19,7 @@ sh "${HERE}/tools/test-app.sh" "${BINARY}" "${SCORE}"
 # osascript calls keep the shell's own, or System Events loses the process's menu bar
 FRESH=$(mktemp -d)
 mkdir -p "${SHOTS}"
-HOME="${FRESH}" TMPDIR="${FRESH}" "${BINARY}" "${SCORE}" < /dev/null > /dev/null 2>&1 &
+HOME="${FRESH}" TMPDIR="${FRESH}" "${BINARY}" "${SCORE}" < /dev/null > "${SHOTS}/app.log" 2>&1 &
 PID=$!
 # the score window sits at layer 0 and floating panels at layer 3
 onscreen() { swift "${HERE}/tools/windows.swift" "${PID}" | awk '$1 == "layer" && ($2 == 0 || $2 == 3) && $4 == "onscreen=true"'; }

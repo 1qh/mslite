@@ -91,10 +91,17 @@ if [ "${MSCORE_PACKAGE_ONLY:-}" != 1 ]; then
   fi
   # the patched modules' unit tests, in a build folder beside the tree with the same options, refuse any failure the
   # untouched upstream base does not share
-  TESTS_OUT=$(sh "${HERE}/tools/unit-tests.sh" "${PWD}" "${PWD}-tests" "${QT}" "${DEPS}" 2>&1) || {
-    printf '%s\n' "${TESTS_OUT}" >&2
+  # MSCORE_ITERATE=1 skips them for a build-only iteration on 1 change; a build that publishes always runs them
+  if [ "${MSCORE_ITERATE:-}" = 1 ] && [ "${MSCORE_BUILD_ONLY:-}" != 1 ]; then
+    echo "MSCORE_ITERATE needs MSCORE_BUILD_ONLY: a build that publishes runs every unit test" >&2
     exit 1
-  }
+  fi
+  if [ "${MSCORE_ITERATE:-}" != 1 ]; then
+    TESTS_OUT=$(sh "${HERE}/tools/unit-tests.sh" "${PWD}" "${PWD}-tests" "${QT}" "${DEPS}" 2>&1) || {
+      printf '%s\n' "${TESTS_OUT}" >&2
+      exit 1
+    }
+  fi
 fi
 [ -x applebuild/mscore.app/Contents/MacOS/mscore ] || {
   echo "build produced no app" >&2
