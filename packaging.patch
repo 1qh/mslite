@@ -1,5 +1,5 @@
 diff --git a/buildscripts/packaging/macOS/package.sh b/buildscripts/packaging/macOS/package.sh
-index c151d289..d1fb2456 100755
+index c151d289..406aabf5 100755
 --- a/buildscripts/packaging/macOS/package.sh
 +++ b/buildscripts/packaging/macOS/package.sh
 @@ -23,6 +23,8 @@ while [[ "$#" -gt 0 ]]; do
@@ -113,7 +113,19 @@ index c151d289..d1fb2456 100755
  else
      echo "Skipping code signing"
  fi
-@@ -187,7 +212,7 @@ hdiutil convert "applebuild/${DMG_NAME}" -format UDBZ -o "applebuild/${COMPRESSE
+@@ -168,9 +193,8 @@ mv "${VOLUME}/Pictures" "${VOLUME}/.Pictures"
+ 
+ echo "Unmount"
+ for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+-    # Unmount the disk image
+-    hdiutil detach $DEV
+-    if [ $? -eq 0 ]; then
++    # Unmount the disk image; the detach sits in the condition, since the ERR trap ends the script on any bare failure
++    if hdiutil detach $DEV; then
+         break
+     fi
+     if [ $i -eq 20 ]; then
+@@ -187,7 +211,7 @@ hdiutil convert "applebuild/${DMG_NAME}" -format UDBZ -o "applebuild/${COMPRESSE
  if $DO_SIGN; then
      echo "Codesign DMG"
      codesign --timestamp \
