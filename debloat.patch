@@ -95,18 +95,6 @@ index 2d9f86c5..bc8374b2 100644
 -        <file>configs/user_agent.cfg</file>
      </qresource>
  </RCC>
-diff --git a/src/app/app_config.h.in b/src/app/app_config.h.in
-index 3772a83f..137313e9 100644
---- a/src/app/app_config.h.in
-+++ b/src/app/app_config.h.in
-@@ -25,6 +25,7 @@
- #cmakedefine MUE_BUILD_MUSESOUNDS_MODULE 1
- #cmakedefine MUE_BUILD_NOTATION_MODULE 1
- #cmakedefine MUE_BUILD_NOTATIONSCENE_MODULE 1
-+#cmakedefine MUE_BUILD_NOTATIONSCENE_QML 1
- #cmakedefine MUE_BUILD_PALETTE_MODULE 1
- #cmakedefine MUE_BUILD_PLAYBACK_MODULE 1
- #cmakedefine MUE_BUILD_PREFERENCES_MODULE 1
 diff --git a/src/app/appfactory.cpp b/src/app/appfactory.cpp
 index fc0496ae..acc451b2 100644
 --- a/src/app/appfactory.cpp
@@ -132,10 +120,10 @@ index fc0496ae..acc451b2 100644
  
  #ifdef MUE_BUILD_CONVERTER_MODULE
 diff --git a/src/app/cmdoptions.h b/src/app/cmdoptions.h
-index 1f0f9a62..2dceceef 100644
+index 1f0f9a62..f9fd8d0b 100644
 --- a/src/app/cmdoptions.h
 +++ b/src/app/cmdoptions.h
-@@ -7,12 +7,14 @@
+@@ -7,6 +7,7 @@
  #include "global/io/path.h"
  #include "global/iapplication.h"
  #include "global/logger.h"
@@ -143,22 +131,7 @@ index 1f0f9a62..2dceceef 100644
  
  namespace mu::app {
  enum class ConvertType {
-     File,
-     Batch,
-     Serve,
-+    KeyboardImage,
-     ConvertScoreParts,
-     ExportScoreMedia,
-     ExportScoreMeta,
-@@ -47,6 +49,7 @@ struct CmdOptions {
-         PageNumber,
-         ScoreRegion,
-         NoAudio,
-+        KeyboardImageWidth,
-     };
- 
-     muse::IApplication::RunMode runMode = muse::IApplication::RunMode::GuiApp;
-@@ -74,6 +77,7 @@ struct CmdOptions {
+@@ -74,6 +75,7 @@ struct CmdOptions {
      } exportAudio;
  
      struct {
@@ -229,29 +202,19 @@ index fa59e1e2..00000000
 -    "cloud": "MS_EDITOR/{app_version}.{app_build} ({kernel_type} {kernel_version} {os_name} {os_version} {cpu_arch})"
 -}
 diff --git a/src/app/internal/commandlineparser.cpp b/src/app/internal/commandlineparser.cpp
-index 0264e3f9..62e22bb5 100644
+index 0264e3f9..497e148b 100644
 --- a/src/app/internal/commandlineparser.cpp
 +++ b/src/app/internal/commandlineparser.cpp
-@@ -21,6 +21,9 @@
+@@ -21,6 +21,8 @@
   */
  #include "commandlineparser.h"
  
-+#include <algorithm>
 +#include <cstdio>
 +#include <cstdlib>
  #include <QDir>
  
  #include "global/io/dir.h"
-@@ -92,6 +95,8 @@ void CommandLineParser::init()
-     m_parser.addOption(QCommandLineOption("serve",
-                                           "Stay running and process 1 conversion job per line of standard input: "
-                                           "{\"id\", \"job\", \"extension\", \"style\"}"));
-+    m_parser.addOption(QCommandLineOption("keyboard-image",
-+                                          "Write piano keyboard PNGs and layers.json: --keyboard-image <folder> <width>", "folder"));
-     m_parser.addOption(QCommandLineOption("extension", "Use extension to process a conversion job", "uri"));
- 
-     m_parser.addOption(QCommandLineOption({ "F", "factory-settings" }, "Use factory settings"));
-@@ -148,10 +153,9 @@ void CommandLineParser::init()
+@@ -148,10 +150,9 @@ void CommandLineParser::init()
      // Video export
  #ifdef MUE_BUILD_IMPEXP_VIDEOEXPORT_MODULE
      m_parser.addOption(QCommandLineOption("score-video", "Generate video for the given score and export it to file"));
@@ -265,20 +228,10 @@ index 0264e3f9..62e22bb5 100644
  // not implemented
  //    m_parser.addOption(QCommandLineOption("piano", "Show Piano, works only if one part and not auto or float modes"));
  //    m_parser.addOption(QCommandLineOption("piano-position", "Show Piano top or bottom. Default bottom", "bottom"));
-@@ -195,7 +199,30 @@ void CommandLineParser::init()
- void CommandLineParser::parse(int argc, char** argv)
- {
+@@ -197,6 +198,22 @@ void CommandLineParser::parse(int argc, char** argv)
      QStringList args = prepareArguments(argc, argv);
--    m_parser.parse(args);
-+    const bool parsed = m_parser.parse(args);
-+    const bool keyboardImage = std::any_of(args.cbegin(), args.cend(), [](const QString& arg) {
-+        return arg == "--keyboard-image" || arg.startsWith("--keyboard-image=");
-+    });
-+    if (keyboardImage && !parsed) {
-+        fprintf(stderr, "--keyboard-image: %s\n", qPrintable(m_parser.errorText()));
-+        exit(EXIT_FAILURE);
-+    }
-+
+     m_parser.parse(args);
+ 
 +#ifdef MUE_BUILD_IMPEXP_VIDEOEXPORT_MODULE
 +    if (m_parser.isSet("view-mode")) {
 +        const QString mode = m_parser.value("view-mode");
@@ -294,32 +247,11 @@ index 0264e3f9..62e22bb5 100644
 +        }
 +    }
 +#endif
- 
++
      auto floatValue = [this](const QString& name) -> std::optional<float> {
          bool ok = true;
-@@ -238,6 +265,21 @@ void CommandLineParser::parse(int argc, char** argv)
-         exit(EXIT_SUCCESS);
-     }
- 
-+    if (keyboardImage) {
-+        m_options.runMode = IApplication::RunMode::ConsoleApp;
-+        m_options.converterTask.type = ConvertType::KeyboardImage;
-+        m_options.converterTask.outputFile = fromUserInputPath(m_parser.value("keyboard-image"));
-+        const QStringList positional = m_parser.positionalArguments();
-+        bool ok = false;
-+        const int width = positional.size() == 1 ? positional.front().toInt(&ok) : 0;
-+        if (!ok || width <= 0 || m_options.converterTask.outputFile.isEmpty()) {
-+            fprintf(stderr, "--keyboard-image requires a nonempty folder and one positive integer width\n");
-+            exit(EXIT_FAILURE);
-+        }
-+        m_options.converterTask.params[CmdOptions::ParamKey::KeyboardImageWidth] = width;
-+        return;
-+    }
-+
-     if (m_parser.isSet("d")) {
-         m_options.app.loggerLevel = logger::Level::Debug;
-     }
-@@ -427,10 +469,6 @@ void CommandLineParser::parse(int argc, char** argv)
+         float val = m_parser.value(name).toFloat(&ok);
+@@ -427,10 +444,6 @@ void CommandLineParser::parse(int argc, char** argv)
          m_options.converterTask.inputFile = scorefiles[0];
          m_options.converterTask.outputFile = fromUserInputPath(m_parser.value("o"));
  
@@ -331,32 +263,10 @@ index 0264e3f9..62e22bb5 100644
              NOT_IMPLEMENTED;
          }
 diff --git a/src/app/internal/consoleapp.cpp b/src/app/internal/consoleapp.cpp
-index 21d481d9..82105f3c 100644
+index 21d481d9..f019fb0b 100644
 --- a/src/app/internal/consoleapp.cpp
 +++ b/src/app/internal/consoleapp.cpp
-@@ -22,6 +22,8 @@
- 
- #include "consoleapp.h"
- 
-+#include <cstdio>
-+#include <cstdlib>
- #include <QApplication>
- #ifndef Q_OS_WASM
- #include <QThreadPool>
-@@ -38,6 +40,12 @@
- #include "muse_framework_config.h"
- #include "app_config.h"
- 
-+#ifdef MUE_BUILD_NOTATIONSCENE_QML
-+#include <QQmlContext>
-+#include <QQmlEngine>
-+#include "notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h"
-+#endif
-+
- #include "log.h"
- #include "settings.h"
- 
-@@ -406,6 +414,7 @@ void ConsoleApp::applyCommandLineOptions(const CmdOptions& options, IApplication
+@@ -406,6 +406,7 @@ void ConsoleApp::applyCommandLineOptions(const CmdOptions& options, IApplication
  #endif
  
  #ifdef MUE_BUILD_IMPEXP_VIDEOEXPORT_MODULE
@@ -364,70 +274,8 @@ index 21d481d9..82105f3c 100644
      videoExportConfiguration()->setResolution(options.exportVideo.resolution);
      videoExportConfiguration()->setFps(options.exportVideo.fps);
      videoExportConfiguration()->setLeadingSec(options.exportVideo.leadingSec);
-@@ -448,6 +457,8 @@ int ConsoleApp::processConverter(const CmdOptions::ConverterTask& task)
-     openParams.unrollRepeats = task.params[CmdOptions::ParamKey::UnrollRepeats].toBool();
- 
-     switch (task.type) {
-+    case ConvertType::KeyboardImage:
-+        return processKeyboardImages(task);
-     case ConvertType::Batch:
-         ret = converter()->batchConvert(task.inputFile, openParams, soundProfile, extensionUri);
-         break;
-@@ -512,6 +523,40 @@ int ConsoleApp::processConverter(const CmdOptions::ConverterTask& task)
-     return ret.code();
- }
- 
-+int ConsoleApp::processKeyboardImages(const CmdOptions::ConverterTask& task)
-+{
-+#ifdef MUE_BUILD_NOTATIONSCENE_QML
-+    if (!uiConfiguration() || !m_context) {
-+        fprintf(stderr, "--keyboard-image: UI configuration or application context is unavailable\n");
-+        return EXIT_FAILURE;
-+    }
-+    settings()->beginTransaction(false);
-+    uiConfiguration()->setCurrentTheme(ui::HIGH_CONTRAST_BLACK_THEME_CODE);
-+    QString error;
-+    if (uiConfiguration()->currentTheme().codeKey != ui::HIGH_CONTRAST_BLACK_THEME_CODE) {
-+        error = QStringLiteral("cannot select the High-contrast Black theme");
-+    } else {
-+        QQmlEngine engine;
-+        muse::QmlIoCContext qmlContext(&engine);
-+        qmlContext.ctx = m_context;
-+        engine.rootContext()->setContextProperty("ioc_context", QVariant::fromValue(&qmlContext));
-+        notation::PianoKeyboardView view;
-+        QQmlEngine::setContextForObject(&view, engine.rootContext());
-+        error = view.writeImages(task.outputFile, task.params[CmdOptions::ParamKey::KeyboardImageWidth].toInt());
-+    }
-+    settings()->rollbackTransaction(false);
-+    if (!error.isEmpty()) {
-+        fprintf(stderr, "--keyboard-image: %s\n", qPrintable(error));
-+        return EXIT_FAILURE;
-+    }
-+    return EXIT_SUCCESS;
-+#else
-+    (void)task;
-+    fprintf(stderr, "--keyboard-image: this build has no notation scene QML keyboard\n");
-+    return EXIT_FAILURE;
-+#endif
-+}
-+
- int ConsoleApp::processDiagnostic(const CmdOptions::Diagnostic& task)
- {
-     if (!diagnosticDrawProvider()) {
-diff --git a/src/app/internal/consoleapp.h b/src/app/internal/consoleapp.h
-index 92e7364a..81a60aaa 100644
---- a/src/app/internal/consoleapp.h
-+++ b/src/app/internal/consoleapp.h
-@@ -85,6 +85,7 @@ public:
- private:
-     void applyCommandLineOptions(const CmdOptions& options, muse::IApplication::RunMode runMode);
-     int processConverter(const CmdOptions::ConverterTask& task);
-+    int processKeyboardImages(const CmdOptions::ConverterTask& task);
-     int processDiagnostic(const CmdOptions::Diagnostic& task);
-     int processAudioPluginRegistration(const CmdOptions::AudioPluginRegistration& task);
-     void processAutobot(const CmdOptions::Autobot& task);
 diff --git a/src/app/main.cpp b/src/app/main.cpp
-index 6784aa2e..e94cc042 100644
+index 6784aa2e..00c534d7 100644
 --- a/src/app/main.cpp
 +++ b/src/app/main.cpp
 @@ -25,6 +25,8 @@
@@ -459,16 +307,6 @@ index 6784aa2e..e94cc042 100644
      QCoreApplication::setApplicationVersion(MUSE_APP_VERSION);
  
  #if !defined(Q_OS_WIN) && !defined(Q_OS_DARWIN) && !defined(Q_OS_WASM)
-@@ -159,6 +174,9 @@ int main(int argc, char** argv)
-     IApplication::RunMode runMode = commandLineParser.runMode();
-     QCoreApplication* qapp = nullptr;
- 
-+    if (commandLineParser.options().converterTask.type == ConvertType::KeyboardImage) {
-+        qputenv("QT_QPA_PLATFORM", "offscreen");
-+    }
-     if (runMode == IApplication::RunMode::AudioPluginRegistration) {
-         qapp = new QCoreApplication(argc, argv);
-     } else {
 diff --git a/src/appshell/CMakeLists.txt b/src/appshell/CMakeLists.txt
 index 1fadd6c3..9b386419 100644
 --- a/src/appshell/CMakeLists.txt
@@ -39966,7 +39804,7 @@ index afcbf4be..a142fee1 100644
      if (m_playbackKeys == keys) return false;
      m_playbackKeys = std::move(keys);
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.h b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.h
-index f5528c31..7ff27d76 100644
+index f5528c31..7696bdd1 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.h
 +++ b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardcontroller.h
 @@ -22,6 +22,7 @@
@@ -39977,7 +39815,7 @@ index f5528c31..7ff27d76 100644
  #include "async/asyncable.h"
  #include "audio/common/audiotypes.h"
  
-@@ -52,6 +53,15 @@ public:
+@@ -52,6 +53,13 @@ public:
      void setPressedKey(std::optional<piano_key_t> key);
      void setHoveredKey(std::optional<piano_key_t> key);
  
@@ -39985,15 +39823,13 @@ index f5528c31..7ff27d76 100644
 +    static constexpr size_t livePlaybackLayer() { return 1; }
 +    static constexpr size_t staffPlaybackLayer(size_t staff) { return staff + livePlaybackLayer() + 1; }
 +    static constexpr size_t chordPlaybackLayer(size_t staffCount) { return staffPlaybackLayer(staffCount); }
-+    static constexpr size_t staffPlaybackLayerCount() { return PIANO_KEY_LAYER_COLORS.size(); }
-+    bool replacePlaybackKeys(PianoKeyLayers keys);
 +    void setExportPlaybackPosition(const INotationPlaybackPtr& playback,
 +                                   const engraving::InstrumentTrackIdSet& tracks,
 +                                   std::optional<muse::audio::secs_t> position);
      KeyState keyState(piano_key_t key) const;
      muse::async::Notification keyStatesChanged() const;
  
-@@ -68,7 +78,9 @@ private:
+@@ -68,7 +76,11 @@ private:
      void onPlaybackPositionChanged(muse::audio::secs_t position);
      void refreshPlaybackKeys();
      void updatePlaybackKeys(muse::audio::secs_t position, bool force = false);
@@ -40001,6 +39837,8 @@ index f5528c31..7ff27d76 100644
 +    void updatePlaybackLayers(const INotationPlaybackPtr& playback,
 +                              const std::vector<engraving::InstrumentTrackIdSet>& layers,
 +                              muse::audio::secs_t position);
++
++    bool replacePlaybackKeys(PianoKeyLayers keys);
  
      void sendNoteOn(piano_key_t key);
      void sendNoteOff(piano_key_t key);
@@ -40085,20 +39923,13 @@ index 3948c13a..a205852d 100644
  }
  
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp
-index c3bfa8de..414211a7 100644
+index c3bfa8de..d81bd9e7 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp
 +++ b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.cpp
-@@ -22,8 +22,17 @@
+@@ -22,8 +22,10 @@
  #include "pianokeyboardview.h"
  
  #include <QPainter>
-+#include <QDir>
-+#include <QImage>
-+#include <QImageWriter>
-+#include <QJsonArray>
-+#include <QJsonDocument>
-+#include <QJsonObject>
-+#include <QSaveFile>
 +#include <QtMath>
  
  #include "pianokeyboardcontroller.h"
@@ -40106,7 +39937,7 @@ index c3bfa8de..414211a7 100644
  
  #include "log.h"
  
-@@ -115,6 +124,16 @@ void PianoKeyboardView::calculateKeyRects()
+@@ -115,6 +117,16 @@ void PianoKeyboardView::calculateKeyRects()
      constexpr qreal defaultSpacing = 2.0;
      constexpr qreal maxSpacing = 2.0;
  
@@ -40123,7 +39954,7 @@ index c3bfa8de..414211a7 100644
      m_spacing = std::min(defaultSpacing * m_keyWidthScaling, maxSpacing);
  
      constexpr qreal defaultWhiteKeyWidth = 30.0;
-@@ -149,6 +168,12 @@ void PianoKeyboardView::calculateKeyRects()
+@@ -149,6 +161,12 @@ void PianoKeyboardView::calculateKeyRects()
      }
  
      m_keysAreaRect.setSize(QSizeF(hPos + m_spacing / 2, m_whiteKeyHeight));
@@ -40136,7 +39967,7 @@ index c3bfa8de..414211a7 100644
      adjustKeysAreaPosition();
  }
  
-@@ -187,19 +212,16 @@ void PianoKeyboardView::updateKeyStateColors()
+@@ -187,19 +205,16 @@ void PianoKeyboardView::updateKeyStateColors()
      m_whiteKeyStateColors[KeyState::None] = Qt::white;
      m_whiteKeyStateColors[KeyState::OtherInSelectedChord] = mixedColors(Qt::white, accentColor, 0.25);
      m_whiteKeyStateColors[KeyState::Selected] = mixedColors(Qt::white, accentColor, isKeysFromMidiInput ? 0.8 : 0.5);
@@ -40156,7 +39987,7 @@ index c3bfa8de..414211a7 100644
  }
  
  void PianoKeyboardView::paint(QPainter* painter)
-@@ -222,6 +244,102 @@ void PianoKeyboardView::paint(QPainter* painter)
+@@ -222,6 +237,19 @@ void PianoKeyboardView::paint(QPainter* painter)
      paintBlackKeys(painter, viewport);
  }
  
@@ -40173,93 +40004,10 @@ index c3bfa8de..414211a7 100644
 +    painter->restore();
 +}
 +
-+QString PianoKeyboardView::writeImages(const QString& folder, int imageWidth)
-+{
-+    if (m_isInitialized || imageWidth <= 0 || folder.isEmpty()) {
-+        return QStringLiteral("keyboard export requires a fresh view, a folder and a positive width");
-+    }
-+    setNumberOfKeys(DEFAULT_PIANO_KEYBOARD_NUMBER_OF_KEYS);
-+    setWidth(imageWidth);
-+    init();
-+    setHeight(qCeil(fittedHeight()));
-+    const QSize imageSize(qRound(width()), qRound(height()));
-+    QImage image(imageSize, QImage::Format_ARGB32_Premultiplied);
-+    if (image.isNull()) {
-+        return QStringLiteral("cannot allocate keyboard image %1 x %2").arg(imageSize.width()).arg(imageSize.height());
-+    }
-+    QDir directory(folder);
-+    if (!directory.mkpath(QStringLiteral("."))) {
-+        return QStringLiteral("cannot create keyboard image folder: %1").arg(directory.absolutePath());
-+    }
-+    const auto writeImage = [this, &image, &directory](const QString& name) -> QString {
-+        image.fill(Qt::transparent);
-+        QPainter painter(&image);
-+        if (!painter.isActive()) {
-+            return QStringLiteral("cannot start keyboard painter for %1").arg(name);
-+        }
-+        paint(&painter);
-+        if (!painter.end()) {
-+            return QStringLiteral("cannot finish keyboard painter for %1").arg(name);
-+        }
-+        QImageWriter writer(directory.filePath(name), "png");
-+        if (!writer.write(image)) {
-+            return QStringLiteral("cannot write %1: %2").arg(writer.fileName(), writer.errorString());
-+        }
-+        return {};
-+    };
-+    m_controller->replacePlaybackKeys({});
-+    QString error = writeImage(QStringLiteral("unlit.png"));
-+    if (!error.isEmpty()) {
-+        return error;
-+    }
-+    QJsonArray staffs;
-+    std::vector<size_t> layers { m_controller->livePlaybackLayer() };
-+    const size_t staffCount = m_controller->staffPlaybackLayerCount();
-+    for (size_t staff = 0; staff < staffCount; ++staff) {
-+        const size_t layer = m_controller->staffPlaybackLayer(staff);
-+        staffs.append(static_cast<qint64>(layer));
-+        layers.push_back(layer);
-+    }
-+    const size_t chords = m_controller->chordPlaybackLayer(staffCount);
-+    layers.push_back(chords);
-+    const int low = m_lowestKey;
-+    const int high = std::min<int>(low + numberOfKeys(), MAX_NUM_KEYS) - 1;
-+    for (int pitch = low; pitch <= high; ++pitch) {
-+        for (const size_t layer : layers) {
-+            PianoKeyLayers keys {};
-+            applyPianoKeyLayer(keys, std::array<piano_key_t, 1> { static_cast<piano_key_t>(pitch) }, layer);
-+            m_controller->replacePlaybackKeys(std::move(keys));
-+            error = writeImage(QStringLiteral("%1-%2.png").arg(pitch).arg(static_cast<qulonglong>(layer)));
-+            if (!error.isEmpty()) {
-+                return error;
-+            }
-+        }
-+    }
-+    m_controller->replacePlaybackKeys({});
-+    const QJsonObject metadata {
-+        { "live", static_cast<qint64>(m_controller->livePlaybackLayer()) },
-+        { "staffs", staffs },
-+        { "chords", static_cast<qint64>(chords) },
-+        { "low", low },
-+        { "high", high },
-+        { "width", image.width() },
-+        { "height", image.height() }
-+    };
-+    QSaveFile file(directory.filePath(QStringLiteral("layers.json")));
-+    if (!file.open(QIODevice::WriteOnly)) {
-+        return QStringLiteral("cannot open %1: %2").arg(file.fileName(), file.errorString());
-+    }
-+    const QByteArray json = QJsonDocument(metadata).toJson(QJsonDocument::Compact);
-+    if (file.write(json) != json.size() || !file.commit()) {
-+        return QStringLiteral("cannot write %1: %2").arg(file.fileName(), file.errorString());
-+    }
-+    return {};
-+}
-+
  void PianoKeyboardView::paintBackground(QPainter* painter)
  {
      painter->fillRect(m_keysAreaRect, backgroundColor);
-@@ -255,7 +373,12 @@ void PianoKeyboardView::paintWhiteKeys(QPainter* painter, const QRectF& viewport
+@@ -255,7 +283,12 @@ void PianoKeyboardView::paintWhiteKeys(QPainter* painter, const QRectF& viewport
  
          painter->translate(rect.topLeft());
  
@@ -40272,7 +40020,7 @@ index c3bfa8de..414211a7 100644
  
          painter->fillPath(path, fillColor);
  
-@@ -351,8 +474,13 @@ void PianoKeyboardView::paintBlackKeys(QPainter* painter, const QRectF& viewport
+@@ -351,8 +384,13 @@ void PianoKeyboardView::paintBlackKeys(QPainter* painter, const QRectF& viewport
              bottomPieceGradient.setFinalStop(0.0, bottom);
          }
  
@@ -40288,7 +40036,7 @@ index c3bfa8de..414211a7 100644
  
          painter->translate(rect.topLeft());
          painter->fillRect(backgroundRect, backgroundColor);
-@@ -362,6 +490,11 @@ void PianoKeyboardView::paintBlackKeys(QPainter* painter, const QRectF& viewport
+@@ -362,6 +400,11 @@ void PianoKeyboardView::paintBlackKeys(QPainter* painter, const QRectF& viewport
      }
  }
  
@@ -40300,7 +40048,7 @@ index c3bfa8de..414211a7 100644
  int PianoKeyboardView::numberOfKeys() const
  {
      return m_numberOfKeys;
-@@ -382,9 +515,9 @@ void PianoKeyboardView::setNumberOfKeys(int number)
+@@ -382,9 +425,9 @@ void PianoKeyboardView::setNumberOfKeys(int number)
          m_lowestKey = 21;
          m_numberOfKeys = 88;
          break;
@@ -40313,7 +40061,7 @@ index c3bfa8de..414211a7 100644
      case 49:
          m_lowestKey = 36;
 diff --git a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h
-index f1bfd8f8..4e5b55e8 100644
+index f1bfd8f8..9348d2a7 100644
 --- a/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h
 +++ b/src/notationscene/qml/MuseScore/NotationScene/pianokeyboard/pianokeyboardview.h
 @@ -28,6 +28,7 @@
@@ -40332,11 +40080,10 @@ index f1bfd8f8..4e5b55e8 100644
  
      Q_PROPERTY(qreal scrollBarPosition READ scrollBarPosition WRITE setScrollBarPosition NOTIFY scrollBarChanged)
      Q_PROPERTY(qreal scrollBarSize READ scrollBarSize NOTIFY scrollBarChanged)
-@@ -55,7 +57,11 @@ public:
+@@ -55,7 +57,10 @@ public:
      Q_INVOKABLE void init();
  
      void paint(QPainter* painter) override;
-+    QString writeImages(const QString& folder, int imageWidth);
 +    void paintPlayback(QPainter* painter, const INotationPlaybackPtr& playback,
 +                       const engraving::InstrumentTrackIdSet& tracks, std::optional<muse::audio::secs_t> position);
  
@@ -40344,7 +40091,7 @@ index f1bfd8f8..4e5b55e8 100644
      int numberOfKeys() const;
      void setNumberOfKeys(int number);
  
-@@ -70,6 +76,7 @@ public:
+@@ -70,6 +75,7 @@ public:
  signals:
      void numberOfKeysChanged();
      void keyWidthScalingChanged();
@@ -40352,7 +40099,7 @@ index f1bfd8f8..4e5b55e8 100644
  
      void scrollBarChanged();
  
-@@ -118,6 +125,7 @@ private:
+@@ -118,6 +124,7 @@ private:
      std::map<KeyState, QColor> m_blackKeyBottomPieceStateColors;
  
      qreal m_keyWidthScaling = 1.0;
