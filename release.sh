@@ -168,6 +168,14 @@ checks() {
 # app; in that case the 4 gates run once, after packaging, beside the features
 [ -n "${MSCORE_CHECK_HOST:-}" ] || gates applebuild/mscore.app
 
+# a packaging run that failed leaves its disk images behind, and the packager refuses to create over them; detach any of
+# their volumes still mounted and remove them, so a failed run never blocks the next
+for image in applebuild/MuseScoreLite-*.dmg; do
+  [ -e "${image}" ] || continue
+  hdiutil info | awk -v img="${PWD}/${image}" '$1 == "image-path" && $3 == img { found = 1 } found && /^\/dev\/disk[0-9]+\t/ { print $1; exit }' > "${image}.devices"
+  while IFS= read -r device; do hdiutil detach -force "${device}" > /dev/null; done < "${image}.devices"
+  rm -f "${image}" "${image}.devices"
+done
 KEY_ID=$(cat "${MSCORE_SECRETS}/asc-api-key-id.txt")
 ISSUER=$(cat "${MSCORE_SECRETS}/asc-api-issuer-id.txt")
 SIGN_IDENTITY="${IDENTITY}" NOTARY_KEY="${MSCORE_SECRETS}/asc-api.p8" \
